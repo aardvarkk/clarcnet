@@ -4,6 +4,7 @@
 #include <iostream>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <stdexcept>
 #include <string>
 #include <sys/fcntl.h>
 #include <sys/socket.h>
