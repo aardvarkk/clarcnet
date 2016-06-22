@@ -18,6 +18,16 @@ namespace clarcnet {
 
 	static const int _buffer_sz = 1<<13;
 
+	typedef uint16_t             packet_sz;
+	typedef std::vector<uint8_t> packet;
+
+	struct cpacket {
+		int fd;
+		packet p;
+	};
+
+	typedef std::vector<cpacket> cpackets;
+
 	void* in_addr(sockaddr* sa) {
 		switch (sa->sa_family) {
 			case AF_INET  : return &((sockaddr_in*) sa)->sin_addr ;
@@ -26,20 +36,20 @@ namespace clarcnet {
 		}
 	}
 
-	typedef std::vector<uint8_t> buffer;
-
 	struct client_data {
 	public:
-		client_data() : buf(_buffer_sz, 0), off(0), len(0) {}
+		packet    buf;
+		packet_sz len;
+		packet_sz tgt;
 
-		buffer buf;
-		int    off;
-		int    len;
+		client_data() : buf(_buffer_sz, 0), len(0), tgt(0) {}
 	};
 
 	class server {
 	public:
 		server(std::string const& port) {
+			int val;
+
 			addrinfo hints    = {}, *res;
 			hints.ai_family   = AF_INET6;
 			hints.ai_flags    = AI_PASSIVE;
@@ -59,8 +69,14 @@ namespace clarcnet {
 				throw std::runtime_error(strerror(errno));
 			}
 
-			int off = 0;
-			err = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof off);
+			val = 0;
+			err = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
+			if (err < 0) {
+				throw std::runtime_error(strerror(errno));
+			}
+
+			val = 1;
+			err = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
 			if (err < 0) {
 				throw std::runtime_error(strerror(errno));
 			}
@@ -81,7 +97,7 @@ namespace clarcnet {
 			freeaddrinfo(res);
 		}
 
-		void process() {
+		cpackets process() {
 			sockaddr_storage client;
 			socklen_t sz = sizeof client;
 			err = accept(fd, (sockaddr*)&client, &sz);
@@ -98,17 +114,34 @@ namespace clarcnet {
 				clients[client_fd];
 			}
 
+			cpackets ret;
 			for (auto& c_to_cd : clients) {
 				int client_fd = c_to_cd.first;
 				client_data& cd = c_to_cd.second;
 
-				buffer& b = cd.buf;
-				err = recv(client_fd, &b[cd.off], b.size() - cd.len, 0);
+				packet& b = cd.buf;
+				err = recv(client_fd, &b[cd.len], b.size() - cd.len, 0);
 				if (err > 0) {
+
+					std::cout << "recv " << err << " bytes" << std::endl;
+
+					// set target size
+					if (!cd.tgt) {
+						packet_sz tgt = *(packet_sz*)&b[0];
+						cd.tgt = ntohs(tgt);
+						std::cout << "packet length is " << cd.tgt << std::endl;
+					}
 					cd.len += err;
-					// for (auto i = 0; i < cd.len; ++i)
-					// 	std::cout << std::hex << +b[i];
-					// std::cout << std::endl;
+
+					// got a whole packet!
+					if (cd.len >= cd.tgt) {
+						// TODO: store full packet to pass back, remove it, and keep any "tail"
+						ret.resize(ret.size() + 1);
+						cpacket& cp = ret[ret.size()-1];
+						cp.fd = client_fd;
+						cp.p.insert(cp.p.begin(), b.begin() + sizeof(packet_sz), b.end());
+						cp.p.resize(cd.tgt - sizeof(packet_sz));
+					}
 				}
 				else if (err < 0) {
 					if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -118,6 +151,8 @@ namespace clarcnet {
 					}
 				}
 			}
+
+			return ret;
 		}
 
 	protected:
@@ -160,7 +195,18 @@ namespace clarcnet {
 		void process() {
 			static bool sent = false;
 			if (!sent) {
-				err = send(fd, "123", 3, 0);
+				std::vector<uint8_t> buf;
+				buf.resize(sizeof(packet_sz));
+				buf.push_back('1');
+				buf.push_back('2');
+				buf.push_back('3');
+				buf.push_back('3');
+				buf.push_back('3');
+				buf.push_back('3');
+				buf.push_back('9');
+				packet_sz sz = buf.size();
+				*(packet_sz*)&buf[0] = htons(sz);
+				err = send(fd, &buf[0], buf.size(), 0);
 				if (err < 0) {
 					throw std::runtime_error(strerror(errno));
 				} else {
