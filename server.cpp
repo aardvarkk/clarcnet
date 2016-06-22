@@ -1,6 +1,9 @@
 #include "clarcnet.h"
 
 #include <cstdlib>
+#include <execinfo.h>
+#include <signal.h>
+#include <unistd.h>
 
 using namespace clarcnet;
 

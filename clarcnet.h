@@ -99,6 +99,7 @@ namespace clarcnet {
 		}
 
 		cpackets process() {
+
 			sockaddr_storage client;
 			socklen_t sz = sizeof client;
 			err = accept(fd, (sockaddr*)&client, &sz);
@@ -113,17 +114,18 @@ namespace clarcnet {
 				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), addr_str, sizeof addr_str);
 				std::cout << addr_str << std::endl;
 				clients[client_fd];
+				std::cout << "CLIENT " << client_fd << " CONNECTED!" << std::endl;
 			}
 
 			cpackets ret;
-			for (auto& c_to_cd : clients) {
-				int client_fd = c_to_cd.first;
-				client_data& cd = c_to_cd.second;
+
+			for (auto c_to_cd = clients.begin(); c_to_cd != clients.end();) {
+				int client_fd = c_to_cd->first;
+				client_data& cd = c_to_cd->second;
 
 				packet& b = cd.buf;
 				err = recv(client_fd, &b[cd.len], b.size() - cd.len, 0);
 				if (err > 0) {
-
 					std::cout << "recv " << err << " bytes" << std::endl;
 
 					// set target size
@@ -146,7 +148,10 @@ namespace clarcnet {
 				}
 				else if (err == 0) {
 					std::cout << "CLIENT " << client_fd << " DISCONNECTED!" << std::endl;
+
 					// TODO: client disconn stuff
+					c_to_cd = clients.erase(c_to_cd);
+					continue;
 				}
 				else {
 					if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -155,6 +160,8 @@ namespace clarcnet {
 						throw std::runtime_error(strerror(errno));
 					}
 				}
+
+				++c_to_cd;
 			}
 
 			return ret;
@@ -197,18 +204,34 @@ namespace clarcnet {
 			}
 		}
 
-		void process() {
+		cpackets process() {
+
+			cpackets ret;
 
 			if (!connected) {
 				fd_set check;
 				FD_SET(fd, &check);
 				timeval timeout = {};
 				err = select(1, nullptr, &check, nullptr, &timeout);
-				if (err > 0) {
+				if (err < 0) {
+					throw std::runtime_error(strerror(errno));
+				}
+				else {
+					int val;
+					socklen_t val_sz;
+					err = getsockopt(fd, SOL_SOCKET, SO_ERROR, &val, &val_sz);
+					if (err < 0) {
+						throw std::runtime_error(strerror(errno));
+					}
+					if (val < 0) {
+						throw std::runtime_error(strerror(val));
+					}
 					std::cout << "connected!" << std::endl;
 					connected = true;
 					freeaddrinfo(res);
 				}
+
+				return ret;
 			}
 
 			static bool sent = false;
@@ -232,6 +255,8 @@ namespace clarcnet {
 				}
 				sent = !sent;
 			}
+
+			return ret;
 		}
 
 	protected:
