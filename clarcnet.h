@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/fcntl.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <set>
@@ -143,7 +144,11 @@ namespace clarcnet {
 						cp.p.resize(cd.tgt - sizeof(packet_sz));
 					}
 				}
-				else if (err < 0) {
+				else if (err == 0) {
+					std::cout << "CLIENT " << client_fd << " DISCONNECTED!" << std::endl;
+					// TODO: client disconn stuff
+				}
+				else {
 					if (errno == EAGAIN || errno == EWOULDBLOCK) {
 
 					} else {
@@ -166,7 +171,9 @@ namespace clarcnet {
 	class client {
 	public:
 		client(std::string const& host, std::string const& port) {
-			addrinfo hints    = {}, *res;
+			connected = false;
+
+			addrinfo hints    = {};
 			hints.ai_family   = AF_UNSPEC;
 			hints.ai_socktype = SOCK_STREAM;
 
@@ -179,20 +186,31 @@ namespace clarcnet {
 				throw std::runtime_error(strerror(errno));
 			}
 
-			err = connect(fd, res->ai_addr, res->ai_addrlen);
-			if (err < 0) {
-				throw std::runtime_error(strerror(errno));
-			}
-
 			err = fcntl(fd, F_SETFL, O_NONBLOCK);
 			if (err < 0) {
 				throw std::runtime_error(strerror(errno));
 			}
 
-			freeaddrinfo(res);
+			err = connect(fd, res->ai_addr, res->ai_addrlen);
+			if (err < 0 && errno != EINPROGRESS) {
+				throw std::runtime_error(strerror(errno));
+			}
 		}
 
 		void process() {
+
+			if (!connected) {
+				fd_set check;
+				FD_SET(fd, &check);
+				timeval timeout = {};
+				err = select(1, nullptr, &check, nullptr, &timeout);
+				if (err > 0) {
+					std::cout << "connected!" << std::endl;
+					connected = true;
+					freeaddrinfo(res);
+				}
+			}
+
 			static bool sent = false;
 			if (!sent) {
 				std::vector<uint8_t> buf;
@@ -217,7 +235,9 @@ namespace clarcnet {
 		}
 
 	protected:
-		int err;
-		int fd;
+		bool      connected;
+		int       err;
+		int       fd;
+		addrinfo* res;
 	};
 }
