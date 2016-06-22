@@ -5,6 +5,9 @@
 using namespace clarcnet;
 
 int main(int argc, char* argv[]) {
-	server("1111");
+	auto sv = server("1111");
+	for (;;) {
+		sv.process();
+	}
 	return EXIT_SUCCESS;
 }
