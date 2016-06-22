@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <stdexcept>
 #include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
