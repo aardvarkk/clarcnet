@@ -8,5 +8,6 @@ install_manifest.txt
 CTestTestfile.cmake
 
 # Binary files
-showip
+client
 server
+showip

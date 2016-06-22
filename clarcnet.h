@@ -21,46 +21,73 @@ namespace clarcnet {
 			hints.ai_flags    = AI_PASSIVE;
 			hints.ai_socktype = SOCK_STREAM;
 
-			if ((err = getaddrinfo(NULL, port.c_str(), &hints, &res)) != 0) {
-				throw gai_strerror(err);
+			if ((err = getaddrinfo(nullptr, port.c_str(), &hints, &res)) != 0) {
+				throw runtime_error(gai_strerror(err));
 			}
 
 			fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 			if (fd == -1) {
-				throw strerror(errno);
+				throw runtime_error(strerror(errno));
 			}
 
 			int off = 0;
 			err = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof off);
 			if (err < 0) {
-				throw strerror(errno);
+				throw runtime_error(strerror(errno));
 			}
 
-			// for (auto p = res; p; p = p->ai_next) {
-			// 	void *addr;
-			// 	string ipver;
+			err = bind(fd, res->ai_addr, res->ai_addrlen);
+			if (err < 0) {
+				throw runtime_error(strerror(errno));
+			}
 
-			// 	if (p->ai_family == AF_INET) {
-			// 		sockaddr_in *ipv4 = (sockaddr_in *)p->ai_addr;
-			// 		addr = &(ipv4->sin_addr);
-			// 		ipver = "IPv4";
-			// 	} else {
-			// 		sockaddr_in6 *ipv6 = (sockaddr_in6 *)p->ai_addr;
-			// 		addr = &(ipv6->sin6_addr);
-			// 		ipver = "IPv6";
-			// 	}
+			err = listen(fd, 0);
+			if (err < 0) {
+				throw runtime_error(strerror(errno));
+			}
 
-			// 	char ipstr[INET6_ADDRSTRLEN];
-			// 	if (!inet_ntop(p->ai_family, addr, ipstr, sizeof ipstr)) {
-			// 		throw errno;
-			// 	}
-			// 	printf("  %s: %s\n", ipver.c_str(), ipstr);
-			// }
+			sockaddr_storage client;
+			socklen_t sz = sizeof client;
+			err = accept(fd, (sockaddr*)&client, &sz);
+			if (err < 0) {
+				throw runtime_error(strerror(errno));
+			}
 
 			freeaddrinfo(res);
 		}
 
-	private:
+	protected:
+		int fd;
+	};
+
+	class client {
+	public:
+		client(string const& host, string const& port) {
+
+			int err;
+
+			addrinfo hints    = {}, *res;
+			hints.ai_family   = AF_UNSPEC;
+			hints.ai_socktype = SOCK_STREAM;
+
+			if ((err = getaddrinfo(host.c_str(), port.c_str(), &hints, &res)) != 0) {
+				throw runtime_error(gai_strerror(err));
+			}
+
+			fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+			if (fd == -1) {
+				throw runtime_error(strerror(errno));
+			}
+
+			err = connect(fd, res->ai_addr, res->ai_addrlen);
+			if (err < 0) {
+				throw runtime_error(strerror(errno));
+			}
+
+			freeaddrinfo(res);
+		}
+
+	protected:
 		int fd;
 	};
 }
