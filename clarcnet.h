@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <errno.h>
+#include <iomanip>
 #include <iostream>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -28,7 +29,12 @@ namespace clarcnet {
 	typedef std::vector<uint8_t> buffer;
 
 	struct client_data {
+	public:
+		client_data() : buf(_buffer_sz, 0), off(0), len(0) {}
+
 		buffer buf;
+		int    off;
+		int    len;
 	};
 
 	class server {
@@ -89,15 +95,20 @@ namespace clarcnet {
 				int client_fd = err;
 				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), addr_str, sizeof addr_str);
 				std::cout << addr_str << std::endl;
-				clients[client_fd].reserve(_buffer_sz);
+				clients[client_fd];
 			}
 
-			for (auto& c_to_b : clients) {
-				int client_fd = c_to_b.first;
-				buffer& b = c_to_b.second;
-				err = recv(client_fd, &b[b.size()], _buffer_sz - b.size(), 0);
+			for (auto& c_to_cd : clients) {
+				int client_fd = c_to_cd.first;
+				client_data& cd = c_to_cd.second;
+
+				buffer& b = cd.buf;
+				err = recv(client_fd, &b[cd.off], b.size() - cd.len, 0);
 				if (err > 0) {
-					std::cout << err << std::endl;
+					cd.len += err;
+					// for (auto i = 0; i < cd.len; ++i)
+					// 	std::cout << std::hex << +b[i];
+					// std::cout << std::endl;
 				}
 				else if (err < 0) {
 					if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -114,7 +125,7 @@ namespace clarcnet {
 		int  fd;
 		char addr_str[INET6_ADDRSTRLEN];
 
-		std::unordered_map<int, buffer> clients;
+		std::unordered_map<int, client_data> clients;
 	};
 
 	class client {
