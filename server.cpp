@@ -17,7 +17,7 @@ int main(int argc, char* argv[]) {
 		std::cout << "got " << ps.size() << " packets" << std::endl;
 
 		for (auto const& p : ps) {
-			switch (p.front()) {
+			switch (p[_msg_type]) {
 				case CONNECTION:
 				{
 					std::cout << "client " << p.fd << " connected" << std::endl;
@@ -30,10 +30,10 @@ int main(int argc, char* argv[]) {
 				}
 				break;
 
-				case DEBUG:
+				case STRING:
 				{
-					std::cout << "client " << p.fd << " sent debug of size " << p.size() << std::endl;
-					for (auto i = 1; i < p.size(); ++i)
+					std::cout << "client " << p.fd << " sent STRING of size " << p.size() << std::endl;
+					for (auto i = _msg_start; i < p.size(); ++i)
 						std::cout << p[i];
 					std::cout << std::endl;
 				}

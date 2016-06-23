@@ -1,3 +1,5 @@
+#pragma once
+
 #include <arpa/inet.h>
 #include <cassert>
 #include <cstring>
@@ -34,30 +36,31 @@ namespace clarcnet {
 		}\
 	}
 
-	static const int _max_packet_sz = 1<<13;
-
 	typedef uint16_t             packet_sz;
 	typedef uint8_t              msg_id_t;
 	typedef std::vector<uint8_t> buffer;
 
-	struct spacket : buffer {
-		spacket() : buffer(sizeof(packet_sz), 0) {}
-	};
-
 	enum msg_id : msg_id_t {
+		UNKNOWN,
 		CONNECTION,
 		DISCONNECTION,
 		PING,
-		DEBUG
+		STRING,
+		USER
 	};
 
-	struct rpacket : buffer {
-		rpacket() : fd(0) {}
-		rpacket(int fd, msg_id mid) : fd(fd) { push_back(mid); }
+	static const int _max_packet_sz = 1<<13;
+	static const int _msg_type      = sizeof(packet_sz);
+	static const int _msg_start     = _msg_type + sizeof(msg_id_t);
+
+	struct packet : buffer {
+		packet() : packet(0, UNKNOWN) {}
+		packet(int fd, msg_id mid) : buffer(_msg_start, 0), fd(fd) { set_msg_id(mid); }
+		void set_msg_id(msg_id mid) { operator[](sizeof(packet_sz)) = mid; }
 		int fd;
 	};
 
-	typedef std::vector<rpacket> rpackets;
+	typedef std::vector<packet> packets;
 
 	void* in_addr(sockaddr* sa) {
 		switch (sa->sa_family) {
@@ -85,7 +88,7 @@ namespace clarcnet {
 	class peer {
 	public:
 
-		ret_code send(spacket& p) {
+		ret_code send(packet& p) {
 			if (p.size() > _max_packet_sz) return FAILURE;
 
 			*(packet_sz*)&p[0] = htons(p.size());
@@ -103,7 +106,7 @@ namespace clarcnet {
 
 	protected:
 
-		ret_code receive(int fd, packet_buffer& pb, rpackets& ps) {
+		ret_code receive(int fd, packet_buffer& pb, packets& ps) {
 
 			buffer& b = pb.buf;
 
@@ -135,10 +138,10 @@ namespace clarcnet {
 					}
 
 					// can finish a packet
-					// the rpacket doesn't include the size, so we trim that off
-					rpacket p;
+					packet p;
 					p.fd = fd;
-					p.insert(p.end(), b.begin() + off + sizeof(packet_sz), b.begin() + off + pb.tgt);
+					p.clear();
+					p.insert(p.end(), b.begin() + off, b.begin() + off + pb.tgt);
 					ps.push_back(p);
 
 					// we've got a full packet, so loop back to see if we can grab another
@@ -207,9 +210,9 @@ namespace clarcnet {
 			freeaddrinfo(res);
 		}
 
-		rpackets process() {
+		packets process() {
 
-			rpackets ret;
+			packets ret;
 
 			sockaddr_storage client;
 			socklen_t sz = sizeof client;
@@ -225,7 +228,7 @@ namespace clarcnet {
 				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), addr_str, sizeof addr_str);
 				std::cout << addr_str << std::endl;
 				conns[client_fd];
-				ret.push_back(rpacket(client_fd, CONNECTION));
+				ret.push_back(packet(client_fd, CONNECTION));
 			}
 
 			for (auto fd_to_pb = conns.begin(); fd_to_pb != conns.end();) {
@@ -233,7 +236,7 @@ namespace clarcnet {
 				switch (code) {
 					case DISCONNECTED:
 					{
-						ret.push_back(rpacket(fd_to_pb->first, DISCONNECTION));
+						ret.push_back(packet(fd_to_pb->first, DISCONNECTION));
 						fd_to_pb = conns.erase(fd_to_pb);
 						continue;
 					}
@@ -280,12 +283,12 @@ namespace clarcnet {
 			}
 		}
 
-		rpackets process() {
+		packets process() {
 
-			rpackets ret;
+			packets ret;
 
 			if (!fd) {
-				ret.push_back(rpacket(fd, DISCONNECTION));
+				ret.push_back(packet(fd, DISCONNECTION));
 				return ret;
 			}
 
@@ -315,8 +318,7 @@ namespace clarcnet {
 				connected = true;
 				freeaddrinfo(res);
 
-				rpacket p;
-				ret.push_back(rpacket(fd, CONNECTION));
+				ret.push_back(packet(fd, CONNECTION));
 
 				return ret;
 			}
@@ -325,7 +327,7 @@ namespace clarcnet {
 			switch (code) {
 				case DISCONNECTED:
 				{
-					ret.push_back(rpacket(fd, DISCONNECTION));
+					ret.push_back(packet(fd, DISCONNECTION));
 					close();
 				}
 				break;

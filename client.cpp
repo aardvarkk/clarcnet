@@ -12,11 +12,11 @@ int main(int argc, char* argv[]) {
 		auto ps = cl.process();
 
 		for (auto const& p : ps) {
-			switch (p.front()) {
+
+			switch (p[_msg_type]) {
 				case CONNECTION:
 				{
-					spacket p;
-					p.push_back(DEBUG);
+					packet p(0, STRING);
 					p.push_back('1');
 					p.push_back('2');
 					p.push_back('3');
@@ -26,8 +26,7 @@ int main(int argc, char* argv[]) {
 					p.push_back('7');
 					cl.send(p);
 
-					spacket p2;
-					p2.push_back(DEBUG);
+					packet p2(0, STRING);
 					p2.push_back('h');
 					p2.push_back('e');
 					p2.push_back('l');
