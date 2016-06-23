@@ -9,10 +9,14 @@ int main(int argc, char* argv[]) {
 	auto cl = client("localhost", "1111");
 
 	for (;;) {
+		static int ack = 0;
+		// std::cout << "client loop" << ++ack << std::endl;
+
 		auto ps = cl.process();
+
 		for (auto const& p : ps) {
 			switch (p.front()) {
-				case CONNECTED:
+				case CONNECTION:
 				{
 					connected = true;
 				}

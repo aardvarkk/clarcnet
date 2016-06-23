@@ -18,9 +18,15 @@ int main(int argc, char* argv[]) {
 
 		for (auto const& p : ps) {
 			switch (p.front()) {
-				case CONNECTED:
+				case CONNECTION:
 				{
 					std::cout << "client " << p.fd << " connected" << std::endl;
+				}
+				break;
+
+				case DISCONNECTION:
+				{
+					std::cout << "client " << p.fd << " disconnected" << std::endl;
 				}
 				break;
 
