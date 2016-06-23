@@ -9,8 +9,6 @@ int main(int argc, char* argv[]) {
 	auto cl = client("localhost", "1111");
 
 	for (;;) {
-		static int ack = 0;
-		// std::cout << "client loop" << ++ack << std::endl;
 
 		auto ps = cl.process();
 
@@ -35,6 +33,16 @@ int main(int argc, char* argv[]) {
 			p.push_back('6');
 			p.push_back('7');
 			cl.send(p);
+
+			spacket p2;
+			p2.push_back(DEBUG);
+			p2.push_back('h');
+			p2.push_back('e');
+			p2.push_back('l');
+			p2.push_back('l');
+			p2.push_back('o');
+			cl.send(p2);
+
 			connected = false; // only try once
 		}
 	}

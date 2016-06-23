@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <cassert>
 #include <cstring>
 #include <deque>
 #include <errno.h>
@@ -81,32 +82,65 @@ namespace clarcnet {
 	};
 
 	class peer {
+	public:
+
+		ret_code send(spacket& p) {
+			*(packet_sz*)&p[0] = htons(p.size());
+			int err = ::send(fd, &p[0], p.size(), 0);
+			chk(err);
+			return SUCCESS;
+		}
+
 	protected:
-		ret_code receive(int fd, packet_buffer& cd, rpackets& ps) {
 
-			buffer& b = cd.buf;
-			int err = recv(fd, &b[cd.len], b.size() - cd.len, 0);
-			if (err > 0) {
-				std::cout << "recv " << err << " bytes" << std::endl;
+		ret_code receive(int fd, packet_buffer& pb, rpackets& ps) {
 
-				// set target size
-				if (!cd.tgt) {
-					packet_sz tgt = *(packet_sz*)&b[0];
-					cd.tgt = ntohs(tgt);
-					std::cout << "packet length is " << cd.tgt << std::endl;
-				}
-				cd.len += err;
+			buffer& b = pb.buf;
 
-				// finished at least one packet
-				if (cd.len >= cd.tgt) {
-					// TODO: store full packet to pass back, remove it, and keep any "tail"
+			int len = recv(fd, &b[pb.len], b.size() - pb.len, 0);
+			if (len > 0) {
+
+				std::cout << "recv " << len << " bytes" << std::endl;
+
+				// keep looping until we've "dealt with" all of the received bytes
+				int off = 0;
+				while (len) {
+					std::cout << "pb.len = " << pb.len << std::endl;
+					std::cout << "pb.tgt = " << pb.tgt << std::endl;
+					std::cout << "   len = " <<    len << std::endl;
+					std::cout << "   off = " <<    off << std::endl;
+
+					// we don't know the size of our packet yet, but we can get it
+					if (!pb.tgt && (pb.len + len >= sizeof pb.tgt)) {
+						pb.tgt = ntohs(*(packet_sz*)&b[off]);
+						std::cout << "packet length is " << pb.tgt << std::endl;
+						pb.len += sizeof pb.tgt;
+						len    -= sizeof pb.tgt;
+					}
+
+					// can't finish this packet with the remaining data
+					if (pb.len + len < pb.tgt) {
+						pb.len += len;
+						return SUCCESS;
+					}
+
+					// can finish a packet
+					// the rpacket doesn't include the size, so we trim that off
 					rpacket p;
 					p.fd = fd;
-					p.insert(p.end(), b.begin() + sizeof(packet_sz), b.begin() + cd.tgt);
+					p.insert(p.end(), b.begin() + off + sizeof(packet_sz), b.begin() + off + pb.tgt);
 					ps.push_back(p);
+
+					// we've got a full packet, so loop back to see if we can grab another
+					len -= pb.tgt - pb.len;
+					assert(len >= 0);
+					off += pb.tgt;
+
+					pb.len = 0;
+					pb.tgt = 0;
 				}
 			}
-			else if (err == 0) {
+			else if (len == 0) {
 				return DISCONNECTED;
 			}
 			else {
@@ -266,7 +300,6 @@ namespace clarcnet {
 				int val;
 				socklen_t val_sz = sizeof val;
 				err = getsockopt(fd, SOL_SOCKET, SO_ERROR, &val, &val_sz);
-				std::cout << val_sz << std::endl;
 				chk(err);
 				if (val < 0) {
 					if (errno == EINPROGRESS) {
@@ -299,16 +332,6 @@ namespace clarcnet {
 			}
 
 			return ret;
-		}
-
-		void send(spacket& p) {
-			std::cout << "sending" << std::endl;
-
-			*(packet_sz*)&p[0] = htons(p.size());
-			int err = ::send(fd, &p[0], p.size(), 0);
-			chk(err);
-
-			std::cout << "sent " << err << " bytes" << std::endl;
 		}
 
 	protected:
