@@ -34,7 +34,7 @@ namespace clarcnet {
 		}\
 	}
 
-	static const int _buffer_sz = 1<<13;
+	static const int _max_packet_sz = 1<<13;
 
 	typedef uint16_t             packet_sz;
 	typedef uint8_t              msg_id_t;
@@ -73,11 +73,12 @@ namespace clarcnet {
 		packet_sz len;
 		packet_sz tgt;
 
-		packet_buffer() : buf(_buffer_sz, 0), len(0), tgt(0) {}
+		packet_buffer() : buf(_max_packet_sz, 0), len(0), tgt(0) {}
 	};
 
 	enum ret_code {
 		SUCCESS,
+		FAILURE,
 		DISCONNECTED
 	};
 
@@ -85,9 +86,18 @@ namespace clarcnet {
 	public:
 
 		ret_code send(spacket& p) {
+			if (p.size() > _max_packet_sz) return FAILURE;
+
 			*(packet_sz*)&p[0] = htons(p.size());
 			int err = ::send(fd, &p[0], p.size(), 0);
 			chk(err);
+			return SUCCESS;
+		}
+
+		ret_code close() {
+			int err = ::close(fd);
+			chk(err);
+			fd = 0;
 			return SUCCESS;
 		}
 
@@ -151,13 +161,6 @@ namespace clarcnet {
 				}
 			}
 
-			return SUCCESS;
-		}
-
-		ret_code close() {
-			int err = ::close(fd);
-			chk(err);
-			fd = 0;
 			return SUCCESS;
 		}
 
