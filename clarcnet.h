@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <cstring>
+#include <deque>
 #include <errno.h>
 #include <iomanip>
 #include <iostream>
@@ -17,17 +18,23 @@
 
 namespace clarcnet {
 
+	#define chk(val) { if (val < 0) throw std::runtime_error(strerror(errno)); }
+
 	static const int _buffer_sz = 1<<13;
 
 	typedef uint16_t             packet_sz;
-	typedef std::vector<uint8_t> packet;
+	typedef uint8_t              msg_id;
+	typedef std::vector<uint8_t> buffer;
 
-	struct cpacket {
-		int fd;
-		packet p;
+	struct spacket : buffer {
+		spacket() : buffer(sizeof(packet_sz), 0) {}
 	};
 
-	typedef std::vector<cpacket> cpackets;
+	struct rpacket : buffer {
+		int fd;
+	};
+
+	typedef std::vector<rpacket> rpackets;
 
 	void* in_addr(sockaddr* sa) {
 		switch (sa->sa_family) {
@@ -39,11 +46,16 @@ namespace clarcnet {
 
 	struct client_data {
 	public:
-		packet    buf;
+		buffer    buf;
 		packet_sz len;
 		packet_sz tgt;
 
 		client_data() : buf(_buffer_sz, 0), len(0), tgt(0) {}
+	};
+
+	enum msg_ids : msg_id {
+		CONNECTED,
+		DEBUG
 	};
 
 	class server {
@@ -61,36 +73,24 @@ namespace clarcnet {
 			}
 
 			fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-			if (fd == -1) {
-				throw std::runtime_error(strerror(errno));
-			}
+			chk(fd);
 
 			err = fcntl(fd, F_SETFL, O_NONBLOCK);
-			if (err < 0) {
-				throw std::runtime_error(strerror(errno));
-			}
+			chk(err);
 
 			val = 0;
 			err = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
-			if (err < 0) {
-				throw std::runtime_error(strerror(errno));
-			}
+			chk(err);
 
 			val = 1;
 			err = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
-			if (err < 0) {
-				throw std::runtime_error(strerror(errno));
-			}
+			chk(err);
 
 			err = bind(fd, res->ai_addr, res->ai_addrlen);
-			if (err < 0) {
-				throw std::runtime_error(strerror(errno));
-			}
+			chk(err);
 
 			err = listen(fd, 0);
-			if (err < 0) {
-				throw std::runtime_error(strerror(errno));
-			}
+			chk(err);
 
 			inet_ntop(res->ai_family, in_addr(res->ai_addr), addr_str, sizeof addr_str);
 			std::cout << addr_str << std::endl;
@@ -98,7 +98,9 @@ namespace clarcnet {
 			freeaddrinfo(res);
 		}
 
-		cpackets process() {
+		rpackets process() {
+
+			rpackets ret;
 
 			sockaddr_storage client;
 			socklen_t sz = sizeof client;
@@ -114,16 +116,18 @@ namespace clarcnet {
 				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), addr_str, sizeof addr_str);
 				std::cout << addr_str << std::endl;
 				clients[client_fd];
-				std::cout << "CLIENT " << client_fd << " CONNECTED!" << std::endl;
-			}
 
-			cpackets ret;
+				rpacket p;
+				p.fd = client_fd;
+				p.push_back(CONNECTED);
+				ret.push_back(p);
+			}
 
 			for (auto c_to_cd = clients.begin(); c_to_cd != clients.end();) {
 				int client_fd = c_to_cd->first;
 				client_data& cd = c_to_cd->second;
 
-				packet& b = cd.buf;
+				buffer& b = cd.buf;
 				err = recv(client_fd, &b[cd.len], b.size() - cd.len, 0);
 				if (err > 0) {
 					std::cout << "recv " << err << " bytes" << std::endl;
@@ -136,14 +140,14 @@ namespace clarcnet {
 					}
 					cd.len += err;
 
-					// got a whole packet!
+					// finished at least one packet
 					if (cd.len >= cd.tgt) {
 						// TODO: store full packet to pass back, remove it, and keep any "tail"
-						ret.resize(ret.size() + 1);
-						cpacket& cp = ret[ret.size()-1];
-						cp.fd = client_fd;
-						cp.p.insert(cp.p.begin(), b.begin() + sizeof(packet_sz), b.end());
-						cp.p.resize(cd.tgt - sizeof(packet_sz));
+						ret.resize(ret.size()+1);
+						rpacket& p = ret[ret.size()-1];
+
+						p.fd = client_fd;
+						p.insert(p.end(), b.begin() + sizeof(packet_sz), b.begin() + cd.tgt);
 					}
 				}
 				else if (err == 0) {
@@ -189,14 +193,10 @@ namespace clarcnet {
 			}
 
 			fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-			if (fd == -1) {
-				throw std::runtime_error(strerror(errno));
-			}
+			chk(fd);
 
 			err = fcntl(fd, F_SETFL, O_NONBLOCK);
-			if (err < 0) {
-				throw std::runtime_error(strerror(errno));
-			}
+			chk(err);
 
 			err = connect(fd, res->ai_addr, res->ai_addrlen);
 			if (err < 0 && errno != EINPROGRESS) {
@@ -204,9 +204,9 @@ namespace clarcnet {
 			}
 		}
 
-		cpackets process() {
+		rpackets process() {
 
-			cpackets ret;
+			rpackets ret;
 
 			if (!connected) {
 				fd_set check;
@@ -220,43 +220,30 @@ namespace clarcnet {
 					int val;
 					socklen_t val_sz;
 					err = getsockopt(fd, SOL_SOCKET, SO_ERROR, &val, &val_sz);
-					if (err < 0) {
-						throw std::runtime_error(strerror(errno));
-					}
-					if (val < 0) {
-						throw std::runtime_error(strerror(val));
-					}
-					std::cout << "connected!" << std::endl;
+					chk(err);
+					chk(val);
+
 					connected = true;
 					freeaddrinfo(res);
-				}
 
-				return ret;
-			}
-
-			static bool sent = false;
-			if (!sent) {
-				std::vector<uint8_t> buf;
-				buf.resize(sizeof(packet_sz));
-				buf.push_back('1');
-				buf.push_back('2');
-				buf.push_back('3');
-				buf.push_back('3');
-				buf.push_back('3');
-				buf.push_back('3');
-				buf.push_back('9');
-				packet_sz sz = buf.size();
-				*(packet_sz*)&buf[0] = htons(sz);
-				err = send(fd, &buf[0], buf.size(), 0);
-				if (err < 0) {
-					throw std::runtime_error(strerror(errno));
-				} else {
-					std::cout << err << std::endl;
+					rpacket p;
+					p.clear();
+					p.push_back(CONNECTED);
+					ret.push_back(p);
 				}
-				sent = !sent;
 			}
 
 			return ret;
+		}
+
+		void send(spacket& p) {
+			std::cout << "sending" << std::endl;
+
+			*(packet_sz*)&p[0] = htons(p.size());
+			err = ::send(fd, &p[0], p.size(), 0);
+			chk(err)
+
+			std::cout << "sent " << err << " bytes" << std::endl;
 		}
 
 	protected:

@@ -10,13 +10,29 @@ using namespace clarcnet;
 int main(int argc, char* argv[]) {
 	auto sv = server("1111");
 	for (;;) {
+		auto ps = sv.process();
 
-		auto cps = sv.process();
-		for (auto const& cp : cps) {
-			std::cout << "got packet of size " << cp.p.size() << " from client " << cp.fd << std::endl;
-			for (auto i = 0; i < cp.p.size(); ++i)
-				std::cout << std::hex << cp.p[i];
-			std::cout << std::endl;
+		if (ps.empty()) continue;
+
+		std::cout << "got " << ps.size() << " packets" << std::endl;
+
+		for (auto const& p : ps) {
+			switch (p.front()) {
+				case CONNECTED:
+				{
+					std::cout << "client " << p.fd << " connected" << std::endl;
+				}
+				break;
+
+				case DEBUG:
+				{
+					std::cout << "client " << p.fd << " sent debug of size " << p.size() << std::endl;
+					for (auto i = 1; i < p.size(); ++i)
+						std::cout << p[i];
+					std::cout << std::endl;
+				}
+				break;
+			}
 		}
 
 		// every now and again decide to send something
