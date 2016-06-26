@@ -73,115 +73,115 @@ namespace clarcnet {
 		int fd;
 		int rpos;
 
-		uint8_t r_uint8_t() {
-			uint8_t v = this->operator[](rpos);
+		int8_t r_int8_t() {
+			int8_t v = this->operator[](rpos);
 			rpos += sizeof v;
 			return v;
 		}
 
-		void w_uint8_t(uint8_t const& v) {
+		void w_int8_t(int8_t const& v) {
 			push_back(v);
 		}
 
 		std::vector<uint8_t> r_vuint8_t() {
 			std::vector<uint8_t> vec;
-			arr_len sz = r_uint16_t();
+			arr_len sz = r_int16_t();
 			vec.resize(sz);
 			for (auto& v : vec)
-				v = r_uint8_t();
+				v = r_int8_t();
 			return vec;
 		}
 
 		void w_vuint8_t(std::vector<uint8_t> const& vec) {
-			w_uint16_t(static_cast<arr_len>(vec.size()));
+			w_int16_t(static_cast<arr_len>(vec.size()));
 			insert(end(), vec.begin(), vec.end());
 		}
 
-		uint16_t r_uint16_t() {
-			uint16_t v = ntohs(*reinterpret_cast<uint16_t*>(&this->operator[](rpos)));
+		int16_t r_int16_t() {
+			int16_t v = ntohs(*reinterpret_cast<int16_t*>(&this->operator[](rpos)));
 			rpos += sizeof v;
 			return v;
 		}
 
-		void w_uint16_t(uint16_t const& v) {
-			uint16_t vn = htons(v);
+		void w_int16_t(int16_t const& v) {
+			int16_t vn = htons(v);
 			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
 			insert(end(), p, p + sizeof v);
 		}
 
-		uint32_t r_uint32_t() {
-			uint32_t v = ntohl(*reinterpret_cast<uint32_t*>(&this->operator[](rpos)));
+		int32_t r_int32_t() {
+			int32_t v = ntohl(*reinterpret_cast<int32_t*>(&this->operator[](rpos)));
 			rpos += sizeof v;
 			return v;
 		}
 
-		void w_uint32_t(uint32_t const& v) {
-			uint32_t vn = htonl(v);
+		void w_int32_t(int32_t const& v) {
+			int32_t vn = htonl(v);
 			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
 			insert(end(), p, p + sizeof v);
 		}
 
 		float r_float(int binplcs = 4) {
-			return static_cast<float>(r_uint32_t()) / (1<<binplcs);
+			return static_cast<float>(r_int32_t()) / (1<<binplcs);
 		}
 
 		void w_float(float const& v, int binplcs = 4) {
-			return w_uint32_t(static_cast<uint32_t>(v * (1<<binplcs)));
+			return w_int32_t(static_cast<int32_t>(v * (1<<binplcs)));
 		}
 
 		std::vector<uint32_t> r_vuint32_t() {
 			std::vector<uint32_t> vec;
-			arr_len sz = r_uint16_t();
+			arr_len sz = r_int16_t();
 			vec.resize(sz);
 			for (auto& v : vec)
-				v = r_uint32_t();
+				v = r_int32_t();
 			return vec;
 		}
 
 		void w_vuint32_t(std::vector<uint32_t> const& vec) {
-			w_uint16_t(static_cast<arr_len>(vec.size()));
+			w_int16_t(static_cast<arr_len>(vec.size()));
 			for (auto const& v : vec)
-				w_uint32_t(v);
+				w_int32_t(v);
 		}
 
-		uint64_t r_uint64_t() {
-			uint64_t v = ntohll(*reinterpret_cast<uint64_t*>(&this->operator[](rpos)));
+		int64_t r_int64_t() {
+			int64_t v = ntohll(*reinterpret_cast<int64_t*>(&this->operator[](rpos)));
 			rpos += sizeof v;
 			return v;
 		}
 
-		void w_uint64_t(uint64_t const& v) {
-			uint64_t vn = htonll(v);
+		void w_int64_t(int64_t const& v) {
+			int64_t vn = htonll(v);
 			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
 			insert(end(), p, p + sizeof v);
 		}
 
 		std::vector<uint64_t> r_vuint64_t() {
 			std::vector<uint64_t> vec;
-			arr_len sz = r_uint16_t();
+			arr_len sz = r_int16_t();
 			vec.resize(sz);
 			for (auto& v : vec)
-				v = r_uint64_t();
+				v = r_int64_t();
 			return vec;
 		}
 
 		void w_vuint64_t(std::vector<uint64_t> const& vec) {
-			w_uint16_t(static_cast<arr_len>(vec.size()));
+			w_int16_t(static_cast<arr_len>(vec.size()));
 			for (auto const& v : vec)
-				w_uint64_t(v);
+				w_int64_t(v);
 		}
 
 		std::string r_string() {
 			std::string str;
-			arr_len sz = r_uint16_t();
-			uint8_t* beg = &this->operator[](rpos);
-			str = std::string(beg, beg + sz);
+			arr_len sz = r_int16_t();
+			uint8_t* p = &this->operator[](rpos);
+			str = std::string(p, p + sz);
 			rpos += sz;
 			return str;
 		}
 
 		void w_string(std::string const& str) {
-			w_uint16_t(static_cast<arr_len>(str.length()));
+			w_int16_t(static_cast<arr_len>(str.length()));
 			insert(end(), str.begin(), str.end());
 		}
 	};
@@ -292,7 +292,8 @@ namespace clarcnet {
 	class server : public peer {
 	public:
 		server(uint16_t port) {
-			int err, val;
+			int err;
+			socklen_t val;
 
 			addrinfo hints    = {}, *res;
 			hints.ai_family   = AF_INET6;
@@ -315,6 +316,10 @@ namespace clarcnet {
 
 			val = 1;
 			err = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
+			chk(err);
+			
+			val = 1;
+			err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 			chk(err);
 
 			err = bind(fd, res->ai_addr, res->ai_addrlen);
@@ -386,6 +391,10 @@ namespace clarcnet {
 			chk(fd);
 
 			err = fcntl(fd, F_SETFL, O_NONBLOCK);
+			chk(err);
+
+			socklen_t val = 1;
+			err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 			chk(err);
 
 			err = connect(fd, res->ai_addr, res->ai_addrlen);
