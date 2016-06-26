@@ -8,7 +8,7 @@
 using namespace clarcnet;
 
 int main(int argc, char* argv[]) {
-	auto sv = server("1111");
+	auto sv = server(1111);
 	for (;;) {
 		auto ps = sv.process();
 

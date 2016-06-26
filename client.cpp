@@ -5,7 +5,7 @@
 using namespace clarcnet;
 
 int main(int argc, char* argv[]) {
-	auto cl = client("localhost", "1111");
+	auto cl = client("localhost", 1111);
 
 	for (;;) {
 

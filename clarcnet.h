@@ -39,36 +39,116 @@ namespace clarcnet {
 	typedef uint16_t             packet_sz;
 	typedef uint8_t              msg_id_t;
 	typedef std::vector<uint8_t> buffer;
+	typedef uint16_t             arr_len;
 
 	enum msg_id : msg_id_t {
-		UNKNOWN,
-		CONNECTION,
-		DISCONNECTION,
-		PING,
-		STRING,
-		USER
+		ID_UNKNOWN,
+		ID_CONNECTION_ACCEPTED,
+		ID_CONNECTION_FAILED,
+		ID_DISCONNECTION,
+		ID_PING,
+		ID_STRING,
+		ID_USER
+	};
+
+	static const char* _msg_strs[] = {
+		"ID_UNKNOWN",
+		"ID_CONNECTION_ACCEPTED",
+		"ID_CONNECTION_FAILED",
+		"ID_DISCONNECTION",
+		"ID_PING",
+		"ID_STRING",
+		"ID_USER"
 	};
 
 	static const int _max_packet_sz = 1<<13;
 	static const int _msg_type      = sizeof(packet_sz);
 	static const int _msg_start     = _msg_type + sizeof(msg_id_t);
+	static const int _max_arr_len   = (1<<(sizeof(arr_len)*8))-1;
 
 	struct packet : buffer {
-		packet() : packet(0, UNKNOWN) {}
-		packet(int fd, msg_id mid) : buffer(_msg_start, 0), fd(fd) { set_msg_id(mid); }
+		packet() : packet(0, ID_UNKNOWN) {}
+		packet(int fd, msg_id mid) : buffer(_msg_start, 0), fd(fd), rpos(_msg_start) { set_msg_id(mid); }
 		void set_msg_id(msg_id mid) { operator[](sizeof(packet_sz)) = mid; }
 		int fd;
+		int rpos;
+
+		uint8_t r_uint8_t() {
+			uint8_t v = this->operator[](rpos);
+			rpos += sizeof v;
+			return v;
+		}
+		
+		void w_uint8_t(uint8_t const& v) {
+			push_back(v);
+		}
+		
+		std::vector<uint8_t> r_vuint8_t() {
+			std::vector<uint8_t> vec;
+			arr_len sz = r_uint16_t();
+			vec.resize(sz);
+			for (auto& v : vec)
+				v = r_uint8_t();
+			return vec;
+		}
+		
+		void w_vuint8_t(std::vector<uint8_t> const& vec) {
+			w_uint16_t(static_cast<arr_len>(vec.size()));
+			insert(end(), vec.begin(), vec.end());
+		}
+		
+		uint16_t r_uint16_t() {
+			uint16_t v = ntohs(*reinterpret_cast<uint16_t*>(&this->operator[](rpos)));
+			rpos += sizeof v;
+			return v;
+		}
+
+		void w_uint16_t(uint16_t const& v) {
+			uint16_t vn = htons(v);
+			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
+			insert(end(), p, p + sizeof v);
+		}
+
+		uint32_t r_uint32_t() {
+			uint32_t v = ntohl(*reinterpret_cast<uint32_t*>(&this->operator[](rpos)));
+			rpos += sizeof v;
+			return v;
+		}
+
+		void w_uint32_t(uint32_t const& v) {
+			uint32_t vn = htonl(v);
+			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
+			insert(end(), p, p + sizeof v);
+		}
+
+		uint64_t r_uint64_t() {
+			uint64_t v = ntohll(*reinterpret_cast<uint64_t*>(&this->operator[](rpos)));
+			rpos += sizeof v;
+			return v;
+		}
+
+		void w_uint64_t(uint64_t const& v) {
+			uint64_t vn = htonll(v);
+			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
+			insert(end(), p, p + sizeof v);
+		}
+
+		std::string r_string() {
+			std::string str;
+			arr_len sz = r_uint16_t();
+			uint8_t* beg = &this->operator[](rpos);
+			str = std::string(beg, beg + sz);
+			rpos += sz;
+			return str;
+		}
+		
+		void w_string(std::string const& str) {
+			w_uint16_t(static_cast<arr_len>(str.length()));
+			insert(end(), str.begin(), str.end());
+		}
 	};
 
 	typedef std::vector<packet> packets;
-
-	void* in_addr(sockaddr* sa) {
-		switch (sa->sa_family) {
-			case AF_INET  : return &((sockaddr_in*) sa)->sin_addr ;
-			case AF_INET6 : return &((sockaddr_in6*)sa)->sin6_addr;
-			default       : return nullptr;
-		}
-	}
 
 	struct packet_buffer {
 	public:
@@ -88,12 +168,12 @@ namespace clarcnet {
 	class peer {
 	public:
 
-		ret_code send(packet& p) {
+		ret_code send(int fd, packet& p) {
 			if (p.size() > _max_packet_sz) return FAILURE;
 
 			*(packet_sz*)&p[0] = htons(p.size());
-			int err = ::send(fd, &p[0], p.size(), 0);
-			chk(err);
+			ssize_t len = ::send(fd, &p[0], p.size(), 0);
+			chk(len);
 			return SUCCESS;
 		}
 
@@ -104,29 +184,39 @@ namespace clarcnet {
 			return SUCCESS;
 		}
 
+		int fd;
+
 	protected:
+
+		static void* in_addr(sockaddr* sa) {
+			switch (sa->sa_family) {
+				case AF_INET  : return &((sockaddr_in*) sa)->sin_addr ;
+				case AF_INET6 : return &((sockaddr_in6*)sa)->sin6_addr;
+				default       : return nullptr;
+			}
+		}
 
 		ret_code receive(int fd, packet_buffer& pb, packets& ps) {
 
 			buffer& b = pb.buf;
 
-			int len = recv(fd, &b[pb.len], b.size() - pb.len, 0);
+			ssize_t len = recv(fd, &b[pb.len], b.size() - pb.len, 0);
 			if (len > 0) {
 
-				std::cout << "recv " << len << " bytes" << std::endl;
+				// std::cout << "recv " << len << " bytes" << std::endl;
 
 				// keep looping until we've "dealt with" all of the received bytes
 				int off = 0;
 				while (len) {
-					std::cout << "pb.len = " << pb.len << std::endl;
-					std::cout << "pb.tgt = " << pb.tgt << std::endl;
-					std::cout << "   len = " <<    len << std::endl;
-					std::cout << "   off = " <<    off << std::endl;
+					// std::cout << "pb.len = " << pb.len << std::endl;
+					// std::cout << "pb.tgt = " << pb.tgt << std::endl;
+					// std::cout << "   len = " <<    len << std::endl;
+					// std::cout << "   off = " <<    off << std::endl;
 
 					// we don't know the size of our packet yet, but we can get it
 					if (!pb.tgt && (pb.len + len >= sizeof pb.tgt)) {
 						pb.tgt = ntohs(*(packet_sz*)&b[off]);
-						std::cout << "packet length is " << pb.tgt << std::endl;
+						// std::cout << "packet length is " << pb.tgt << std::endl;
 						pb.len += sizeof pb.tgt;
 						len    -= sizeof pb.tgt;
 					}
@@ -166,13 +256,11 @@ namespace clarcnet {
 
 			return SUCCESS;
 		}
-
-		int fd;
 	};
 
 	class server : public peer {
 	public:
-		server(std::string const& port) {
+		server(uint16_t port) {
 			int err, val;
 
 			addrinfo hints    = {}, *res;
@@ -180,7 +268,7 @@ namespace clarcnet {
 			hints.ai_flags    = AI_PASSIVE;
 			hints.ai_socktype = SOCK_STREAM;
 
-			if ((err = getaddrinfo(nullptr, port.c_str(), &hints, &res)) != 0) {
+			if ((err = getaddrinfo(nullptr, std::to_string(port).c_str(), &hints, &res)) != 0) {
 				throw std::runtime_error(gai_strerror(err));
 			}
 
@@ -204,7 +292,7 @@ namespace clarcnet {
 			err = listen(fd, 0);
 			chk(err);
 
-			inet_ntop(res->ai_family, in_addr(res->ai_addr), addr_str, sizeof addr_str);
+			inet_ntop(res->ai_family, peer::in_addr(res->ai_addr), addr_str, sizeof addr_str);
 			std::cout << addr_str << std::endl;
 
 			freeaddrinfo(res);
@@ -225,10 +313,10 @@ namespace clarcnet {
 				}
 			} else {
 				int client_fd = err;
-				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), addr_str, sizeof addr_str);
+				inet_ntop(client.ss_family, peer::in_addr((sockaddr*)&client), addr_str, sizeof addr_str);
 				std::cout << addr_str << std::endl;
 				conns[client_fd];
-				ret.push_back(packet(client_fd, CONNECTION));
+				ret.push_back(packet(client_fd, ID_CONNECTION_ACCEPTED));
 			}
 
 			for (auto fd_to_pb = conns.begin(); fd_to_pb != conns.end();) {
@@ -236,7 +324,7 @@ namespace clarcnet {
 				switch (code) {
 					case DISCONNECTED:
 					{
-						ret.push_back(packet(fd_to_pb->first, DISCONNECTION));
+						ret.push_back(packet(fd_to_pb->first, ID_DISCONNECTION));
 						fd_to_pb = conns.erase(fd_to_pb);
 						continue;
 					}
@@ -259,7 +347,7 @@ namespace clarcnet {
 
 	class client : public peer {
 	public:
-		client(std::string const& host, std::string const& port) {
+		client(std::string const& host, uint16_t port) {
 			connected = false;
 
 			addrinfo hints    = {};
@@ -267,7 +355,7 @@ namespace clarcnet {
 			hints.ai_socktype = SOCK_STREAM;
 
 			int err;
-			if ((err = getaddrinfo(host.c_str(), port.c_str(), &hints, &res)) != 0) {
+			if ((err = getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res)) != 0) {
 				throw std::runtime_error(gai_strerror(err));
 			}
 
@@ -288,7 +376,7 @@ namespace clarcnet {
 			packets ret;
 
 			if (!fd) {
-				ret.push_back(packet(fd, DISCONNECTION));
+				ret.push_back(packet(fd, ID_DISCONNECTION));
 				return ret;
 			}
 
@@ -318,7 +406,7 @@ namespace clarcnet {
 				connected = true;
 				freeaddrinfo(res);
 
-				ret.push_back(packet(fd, CONNECTION));
+				ret.push_back(packet(fd, ID_CONNECTION_ACCEPTED));
 
 				return ret;
 			}
@@ -327,7 +415,7 @@ namespace clarcnet {
 			switch (code) {
 				case DISCONNECTED:
 				{
-					ret.push_back(packet(fd, DISCONNECTION));
+					ret.push_back(packet(fd, ID_DISCONNECTION));
 					close();
 				}
 				break;
