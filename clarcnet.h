@@ -145,13 +145,21 @@ namespace clarcnet {
 		}
 
 		int64_t r_int64_t() {
+			#ifdef __linux
+			int64_t v = be64toh(*reinterpret_cast<int64_t*>(&this->operator[](rpos)));
+			#else
 			int64_t v = ntohll(*reinterpret_cast<int64_t*>(&this->operator[](rpos)));
+			#endif
 			rpos += sizeof v;
 			return v;
 		}
 
 		void w_int64_t(int64_t const& v) {
+			#ifdef __linux
+			int64_t vn = htobe64(v);
+			#else
 			int64_t vn = htonll(v);
+			#endif
 			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
 			insert(end(), p, p + sizeof v);
 		}
