@@ -3,10 +3,7 @@
 #include <arpa/inet.h>
 #include <cassert>
 #include <cstring>
-#include <deque>
 #include <errno.h>
-#include <iomanip>
-#include <iostream>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdexcept>
@@ -18,15 +15,18 @@
 #include <sys/types.h>
 #include <set>
 #include <unistd.h>
-#include <unordered_map>
 #include <vector>
 
 namespace clarcnet {
 
+//	#define thr \
+//		throw std::runtime_error(\
+//				std::string(__FILE__) + ":" +\
+//				std::to_string(__LINE__) + " " +\
+//				std::string(strerror(errno)));
+
 	#define thr \
 		throw std::runtime_error(\
-				std::string(__FILE__) + ":" +\
-				std::to_string(__LINE__) + " " +\
 				std::string(strerror(errno)));
 
 	#define chk(val) \
@@ -67,7 +67,7 @@ namespace clarcnet {
 	static const int _max_arr_len   = (1<<(sizeof(arr_len)*8))-1;
 
 	struct packet : buffer {
-		packet() : packet(0, ID_UNKNOWN) {}
+		packet() : packet(-1, ID_UNKNOWN) {}
 		packet(int fd, msg_id mid) : buffer(_msg_start, 0), fd(fd), rpos(_msg_start) { set_msg_id(mid); }
 		void set_msg_id(msg_id mid) { operator[](sizeof(packet_sz)) = mid; }
 		int fd;
@@ -78,11 +78,11 @@ namespace clarcnet {
 			rpos += sizeof v;
 			return v;
 		}
-		
+
 		void w_uint8_t(uint8_t const& v) {
 			push_back(v);
 		}
-		
+
 		std::vector<uint8_t> r_vuint8_t() {
 			std::vector<uint8_t> vec;
 			arr_len sz = r_uint16_t();
@@ -91,12 +91,12 @@ namespace clarcnet {
 				v = r_uint8_t();
 			return vec;
 		}
-		
+
 		void w_vuint8_t(std::vector<uint8_t> const& vec) {
 			w_uint16_t(static_cast<arr_len>(vec.size()));
 			insert(end(), vec.begin(), vec.end());
 		}
-		
+
 		uint16_t r_uint16_t() {
 			uint16_t v = ntohs(*reinterpret_cast<uint16_t*>(&this->operator[](rpos)));
 			rpos += sizeof v;
@@ -121,6 +121,29 @@ namespace clarcnet {
 			insert(end(), p, p + sizeof v);
 		}
 
+		float r_float(int binplcs = 4) {
+			return static_cast<float>(r_uint32_t()) / (1<<binplcs);
+		}
+
+		void w_float(float const& v, int binplcs = 4) {
+			return w_uint32_t(static_cast<uint32_t>(v * (1<<binplcs)));
+		}
+
+		std::vector<uint32_t> r_vuint32_t() {
+			std::vector<uint32_t> vec;
+			arr_len sz = r_uint16_t();
+			vec.resize(sz);
+			for (auto& v : vec)
+				v = r_uint32_t();
+			return vec;
+		}
+
+		void w_vuint32_t(std::vector<uint32_t> const& vec) {
+			w_uint16_t(static_cast<arr_len>(vec.size()));
+			for (auto const& v : vec)
+				w_uint32_t(v);
+		}
+
 		uint64_t r_uint64_t() {
 			uint64_t v = ntohll(*reinterpret_cast<uint64_t*>(&this->operator[](rpos)));
 			rpos += sizeof v;
@@ -133,6 +156,21 @@ namespace clarcnet {
 			insert(end(), p, p + sizeof v);
 		}
 
+		std::vector<uint64_t> r_vuint64_t() {
+			std::vector<uint64_t> vec;
+			arr_len sz = r_uint16_t();
+			vec.resize(sz);
+			for (auto& v : vec)
+				v = r_uint64_t();
+			return vec;
+		}
+
+		void w_vuint64_t(std::vector<uint64_t> const& vec) {
+			w_uint16_t(static_cast<arr_len>(vec.size()));
+			for (auto const& v : vec)
+				w_uint64_t(v);
+		}
+
 		std::string r_string() {
 			std::string str;
 			arr_len sz = r_uint16_t();
@@ -141,7 +179,7 @@ namespace clarcnet {
 			rpos += sz;
 			return str;
 		}
-		
+
 		void w_string(std::string const& str) {
 			w_uint16_t(static_cast<arr_len>(str.length()));
 			insert(end(), str.begin(), str.end());
@@ -178,10 +216,14 @@ namespace clarcnet {
 		}
 
 		ret_code close() {
-			int err = ::close(fd);
-			chk(err);
-			fd = 0;
-			return SUCCESS;
+			if (fd >= 0) {
+				int err = ::close(fd);
+				chk(err);
+				fd = -1;
+				return SUCCESS;
+			} else {
+				return DISCONNECTED;
+			}
 		}
 
 		int fd;
@@ -202,39 +244,25 @@ namespace clarcnet {
 
 			ssize_t len = recv(fd, &b[pb.len], b.size() - pb.len, 0);
 			if (len > 0) {
-
-				// std::cout << "recv " << len << " bytes" << std::endl;
-
-				// keep looping until we've "dealt with" all of the received bytes
 				int off = 0;
 				while (len) {
-					// std::cout << "pb.len = " << pb.len << std::endl;
-					// std::cout << "pb.tgt = " << pb.tgt << std::endl;
-					// std::cout << "   len = " <<    len << std::endl;
-					// std::cout << "   off = " <<    off << std::endl;
-
-					// we don't know the size of our packet yet, but we can get it
 					if (!pb.tgt && (pb.len + len >= sizeof pb.tgt)) {
 						pb.tgt = ntohs(*(packet_sz*)&b[off]);
-						// std::cout << "packet length is " << pb.tgt << std::endl;
 						pb.len += sizeof pb.tgt;
 						len    -= sizeof pb.tgt;
 					}
 
-					// can't finish this packet with the remaining data
 					if (pb.len + len < pb.tgt) {
 						pb.len += len;
 						return SUCCESS;
 					}
 
-					// can finish a packet
 					packet p;
 					p.fd = fd;
 					p.clear();
 					p.insert(p.end(), b.begin() + off, b.begin() + off + pb.tgt);
 					ps.push_back(p);
 
-					// we've got a full packet, so loop back to see if we can grab another
 					len -= pb.tgt - pb.len;
 					assert(len >= 0);
 					off += pb.tgt;
@@ -247,7 +275,10 @@ namespace clarcnet {
 				return DISCONNECTED;
 			}
 			else {
-				if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				if (errno == ECONNRESET) {
+					return DISCONNECTED;
+				}
+				else if (errno == EAGAIN || errno == EWOULDBLOCK) {
 
 				} else {
 					thr;
@@ -292,9 +323,6 @@ namespace clarcnet {
 			err = listen(fd, 0);
 			chk(err);
 
-			inet_ntop(res->ai_family, peer::in_addr(res->ai_addr), addr_str, sizeof addr_str);
-			std::cout << addr_str << std::endl;
-
 			freeaddrinfo(res);
 		}
 
@@ -304,17 +332,14 @@ namespace clarcnet {
 
 			sockaddr_storage client;
 			socklen_t sz = sizeof client;
-			int err = accept(fd, (sockaddr*)&client, &sz);
-			if (err < 0) {
+			int client_fd = accept(fd, (sockaddr*)&client, &sz);
+			if (client_fd < 0) {
 				if (errno == EAGAIN || errno == EWOULDBLOCK) {
 
 				} else {
 					thr;
 				}
 			} else {
-				int client_fd = err;
-				inet_ntop(client.ss_family, peer::in_addr((sockaddr*)&client), addr_str, sizeof addr_str);
-				std::cout << addr_str << std::endl;
 				conns[client_fd];
 				ret.push_back(packet(client_fd, ID_CONNECTION_ACCEPTED));
 			}
@@ -340,8 +365,6 @@ namespace clarcnet {
 		}
 
 	protected:
-		char addr_str[INET6_ADDRSTRLEN];
-
 		std::unordered_map<int, packet_buffer> conns;
 	};
 
@@ -375,7 +398,7 @@ namespace clarcnet {
 
 			packets ret;
 
-			if (!fd) {
+			if (fd < 0) {
 				ret.push_back(packet(fd, ID_DISCONNECTION));
 				return ret;
 			}
@@ -417,6 +440,7 @@ namespace clarcnet {
 				{
 					ret.push_back(packet(fd, ID_DISCONNECTION));
 					close();
+					connected = false;
 				}
 				break;
 
