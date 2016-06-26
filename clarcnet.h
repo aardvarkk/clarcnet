@@ -353,6 +353,9 @@ namespace clarcnet {
 					thr;
 				}
 			} else {
+				int err = fcntl(client_fd, F_SETFL, O_NONBLOCK);
+				chk(err);
+
 				conns[client_fd];
 				ret.push_back(packet(client_fd, ID_CONNECTION_ACCEPTED));
 			}
