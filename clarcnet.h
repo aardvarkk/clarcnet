@@ -15,15 +15,16 @@
 #include <sys/types.h>
 #include <set>
 #include <unistd.h>
+#include <unordered_map>
 #include <vector>
 
 namespace clarcnet {
 
-//	#define thr \
-//		throw std::runtime_error(\
-//				std::string(__FILE__) + ":" +\
-//				std::to_string(__LINE__) + " " +\
-//				std::string(strerror(errno)));
+	// #define thr \
+	// 	throw std::runtime_error(\
+	// 			std::string(__FILE__) + ":" +\
+	// 			std::to_string(__LINE__) + " " +\
+	// 			std::string(strerror(errno)));
 
 	#define thr \
 		throw std::runtime_error(\
@@ -36,7 +37,7 @@ namespace clarcnet {
 		}\
 	}
 
-	typedef uint16_t             packet_sz;
+	typedef uint32_t             packet_sz;
 	typedef uint8_t              msg_id_t;
 	typedef std::vector<uint8_t> buffer;
 	typedef uint16_t             arr_len;
@@ -46,7 +47,6 @@ namespace clarcnet {
 		ID_CONNECTION_ACCEPTED,
 		ID_CONNECTION_FAILED,
 		ID_DISCONNECTION,
-		ID_PING,
 		ID_STRING,
 		ID_USER
 	};
@@ -56,20 +56,18 @@ namespace clarcnet {
 		"ID_CONNECTION_ACCEPTED",
 		"ID_CONNECTION_FAILED",
 		"ID_DISCONNECTION",
-		"ID_PING",
 		"ID_STRING",
 		"ID_USER"
 	};
 
-	static const int _max_packet_sz = 1<<13;
-	static const int _msg_type      = sizeof(packet_sz);
-	static const int _msg_start     = _msg_type + sizeof(msg_id_t);
-	static const int _max_arr_len   = (1<<(sizeof(arr_len)*8))-1;
+	static const packet_sz _msg_type      = sizeof(packet_sz);
+	static const packet_sz _msg_start     = _msg_type + sizeof(msg_id_t);
+	static const packet_sz _max_arr_len   = std::numeric_limits<arr_len>::max();
+	static const packet_sz _max_packet_sz = std::numeric_limits<packet_sz>::max();
 
 	struct packet : buffer {
 		packet() : packet(-1, ID_UNKNOWN) {}
-		packet(int fd, msg_id mid) : buffer(_msg_start, 0), fd(fd), rpos(_msg_start) { set_msg_id(mid); }
-		void set_msg_id(msg_id mid) { operator[](sizeof(packet_sz)) = mid; }
+		packet(int fd, msg_id mid) : buffer(_msg_start, 0), fd(fd), rpos(_msg_start) { this->operator[](_msg_type) = mid; }
 		int fd;
 		int rpos;
 
@@ -202,7 +200,7 @@ namespace clarcnet {
 		packet_sz len;
 		packet_sz tgt;
 
-		packet_buffer() : buf(_max_packet_sz, 0), len(0), tgt(0) {}
+		packet_buffer() : buf(_msg_start, 0), len(0), tgt(0) {}
 	};
 
 	enum ret_code {
@@ -216,14 +214,13 @@ namespace clarcnet {
 
 		ret_code send(int fd, packet& p) {
 			if (p.size() > _max_packet_sz) return FAILURE;
-
-			*(packet_sz*)&p[0] = htons(p.size());
+			*(packet_sz*)&p[0] = htonl(p.size());
 			ssize_t len = ::send(fd, &p[0], p.size(), 0);
 			chk(len);
 			return SUCCESS;
 		}
 
-		ret_code close() {
+		ret_code close(int fd) {
 			if (fd >= 0) {
 				int err = ::close(fd);
 				chk(err);
@@ -250,17 +247,26 @@ namespace clarcnet {
 
 			buffer& b = pb.buf;
 
+			if (b.size() - pb.len == 0)
+				b.resize(b.size() * 2);
+
 			ssize_t len = recv(fd, &b[pb.len], b.size() - pb.len, 0);
 			if (len > 0) {
 				int off = 0;
 				while (len) {
-					if (!pb.tgt && (pb.len + len >= sizeof pb.tgt)) {
-						pb.tgt = ntohs(*(packet_sz*)&b[off]);
+
+					if (!pb.tgt && (pb.len + len >= sizeof(pb.tgt))) {
+						pb.tgt = ntohl(*(packet_sz*)&b[off]);
+
+						if (pb.tgt > _max_packet_sz) {
+							return DISCONNECTED;
+						}
+
 						pb.len += sizeof pb.tgt;
 						len    -= sizeof pb.tgt;
 					}
 
-					if (pb.len + len < pb.tgt) {
+					if (!pb.tgt || (pb.len + len < pb.tgt)) {
 						pb.len += len;
 						return SUCCESS;
 					}
@@ -325,7 +331,7 @@ namespace clarcnet {
 			val = 1;
 			err = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
 			chk(err);
-			
+
 			val = 1;
 			err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 			chk(err);
@@ -366,6 +372,7 @@ namespace clarcnet {
 					case DISCONNECTED:
 					{
 						ret.push_back(packet(fd_to_pb->first, ID_DISCONNECTION));
+						close(fd_to_pb->first);
 						fd_to_pb = conns.erase(fd_to_pb);
 						continue;
 					}
@@ -459,7 +466,7 @@ namespace clarcnet {
 				case DISCONNECTED:
 				{
 					ret.push_back(packet(fd, ID_DISCONNECTION));
-					close();
+					close(fd);
 					connected = false;
 				}
 				break;

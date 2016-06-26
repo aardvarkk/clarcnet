@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <execinfo.h>
+#include <iostream>
 #include <signal.h>
 #include <unistd.h>
 
@@ -18,24 +19,24 @@ int main(int argc, char* argv[]) {
 
 		for (auto const& p : ps) {
 			switch (p[_msg_type]) {
-				case CONNECTION:
+				case ID_CONNECTION_ACCEPTED:
 				{
 					std::cout << "client " << p.fd << " connected" << std::endl;
 				}
 				break;
 
-				case DISCONNECTION:
+				case ID_DISCONNECTION:
 				{
 					std::cout << "client " << p.fd << " disconnected" << std::endl;
 				}
 				break;
 
-				case STRING:
+				case ID_STRING:
 				{
 					std::cout << "client " << p.fd << " sent STRING of size " << p.size() << std::endl;
-					for (auto i = _msg_start; i < p.size(); ++i)
-						std::cout << p[i];
-					std::cout << std::endl;
+					// for (auto i = _msg_start; i < p.size(); ++i)
+						// std::cout << p[i];
+					// std::cout << std::endl;
 				}
 				break;
 			}

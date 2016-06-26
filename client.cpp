@@ -14,9 +14,9 @@ int main(int argc, char* argv[]) {
 		for (auto const& p : ps) {
 
 			switch (p[_msg_type]) {
-				case CONNECTION:
+				case ID_CONNECTION_ACCEPTED:
 				{
-					packet p(0, STRING);
+					packet p(0, ID_STRING);
 					p.push_back('1');
 					p.push_back('2');
 					p.push_back('3');
@@ -24,21 +24,25 @@ int main(int argc, char* argv[]) {
 					p.push_back('5');
 					p.push_back('6');
 					p.push_back('7');
-					cl.send(p);
+					cl.send(cl.fd, p);
 
-					packet p2(0, STRING);
+					packet p2(0, ID_STRING);
 					p2.push_back('h');
 					p2.push_back('e');
 					p2.push_back('l');
 					p2.push_back('l');
 					p2.push_back('o');
-					cl.send(p2);
+					cl.send(cl.fd, p2);
+
+					packet p3(0, ID_STRING);
+					for (auto i = 0; i < 100000; ++i)
+						p3.push_back('a' + i % 26);
+					cl.send(cl.fd, p3);
 				}
 				break;
 
-				case DISCONNECTION:
+				case ID_DISCONNECTION:
 				{
-					cl.close();
 					return EXIT_FAILURE;
 				}
 				break;
