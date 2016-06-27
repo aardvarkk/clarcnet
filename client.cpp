@@ -54,6 +54,11 @@ int main(int argc, char* argv[]) {
 					std::cout << "timed out" << std::endl;
 					return EXIT_FAILURE;
 				}
+
+				case ID_PING:
+				{
+					std::cout << "ping" << std::endl;
+				}
 			}
 		}
 	}

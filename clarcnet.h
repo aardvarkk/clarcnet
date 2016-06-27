@@ -38,16 +38,20 @@ namespace clarcnet {
 		}\
 	}
 
-	typedef uint32_t             packet_sz;
-	typedef uint8_t              msg_id_t;
-	typedef std::vector<uint8_t> buffer;
-	typedef uint16_t             arr_len;
+	typedef uint16_t                           arr_len;
+	typedef std::vector<uint8_t>               buffer;
+	typedef std::chrono::high_resolution_clock clk;
+	typedef uint8_t                            msg_id_t;
+	typedef std::chrono::milliseconds          ms;
+	typedef uint32_t                           packet_sz;
+	typedef std::chrono::time_point<clk>       tp;
 
 	enum msg_id : msg_id_t {
 		ID_UNKNOWN,
 		ID_CONNECTION,
 		ID_DISCONNECTION,
 		ID_TIMEOUT,
+		ID_PING,
 		ID_USER
 	};
 
@@ -56,6 +60,7 @@ namespace clarcnet {
 		"ID_CONNECTION",
 		"ID_DISCONNECTION",
 		"ID_TIMEOUT",
+		"ID_PING",
 		"ID_USER"
 	};
 
@@ -193,14 +198,15 @@ namespace clarcnet {
 
 	typedef std::vector<packet> packets;
 
-	struct packet_buffer {
+	struct client_info {
 	public:
+		client_info() : buf(_msg_start, 0), len(0), tgt(0), last_ping(clk::now()) {}
+
 		char      addr_str[INET6_ADDRSTRLEN];
 		buffer    buf;
+		tp        last_ping;
 		packet_sz len;
 		packet_sz tgt;
-
-		packet_buffer() : buf(_msg_start, 0), len(0), tgt(0) {}
 	};
 
 	enum ret_code {
@@ -213,11 +219,14 @@ namespace clarcnet {
 	public:
 
 		ret_code send(int fd, packet& p) {
-			if (p.size() > _max_packet_sz) return FAILURE;
+			if (p.empty() || p.size() > _max_packet_sz) return FAILURE;
+
 			*(packet_sz*)&p[0] = htonl(p.size());
 			ssize_t len = ::send(fd, &p[0], p.size(), 0);
-			chk(len);
-			return SUCCESS;
+
+			if (len > 0) return SUCCESS;
+			else if (len == ECONNRESET) return DISCONNECTED;
+			else thr;
 		}
 
 		ret_code close(int fd) {
@@ -243,46 +252,46 @@ namespace clarcnet {
 			}
 		}
 
-		ret_code receive(int fd, packet_buffer& pb, packets& ps) {
+		ret_code receive(int fd, client_info& ci, packets& ps) {
 
-			buffer& b = pb.buf;
+			buffer& b = ci.buf;
 
-			if (b.size() - pb.len == 0)
+			if (b.size() - ci.len == 0)
 				b.resize(b.size() * 2);
 
-			ssize_t len = recv(fd, &b[pb.len], b.size() - pb.len, 0);
+			ssize_t len = recv(fd, &b[ci.len], b.size() - ci.len, 0);
 			if (len > 0) {
 				int off = 0;
 				while (len) {
 
-					if (!pb.tgt && (pb.len + len >= sizeof(pb.tgt))) {
-						pb.tgt = ntohl(*(packet_sz*)&b[off]);
+					if (!ci.tgt && (ci.len + len >= sizeof(ci.tgt))) {
+						ci.tgt = ntohl(*(packet_sz*)&b[off]);
 
-						if (pb.tgt > _max_packet_sz) {
+						if (ci.tgt > _max_packet_sz) {
 							return DISCONNECTED;
 						}
 
-						pb.len += sizeof pb.tgt;
-						len    -= sizeof pb.tgt;
+						ci.len += sizeof ci.tgt;
+						len    -= sizeof ci.tgt;
 					}
 
-					if (!pb.tgt || (pb.len + len < pb.tgt)) {
-						pb.len += len;
+					if (!ci.tgt || (ci.len + len < ci.tgt)) {
+						ci.len += len;
 						return SUCCESS;
 					}
 
 					packet p;
 					p.fd = fd;
 					p.clear();
-					p.insert(p.end(), b.begin() + off, b.begin() + off + pb.tgt);
+					p.insert(p.end(), b.begin() + off, b.begin() + off + ci.tgt);
 					ps.push_back(p);
 
-					len -= pb.tgt - pb.len;
+					len -= ci.tgt - ci.len;
 					assert(len >= 0);
-					off += pb.tgt;
+					off += ci.tgt;
 
-					pb.len = 0;
-					pb.tgt = 0;
+					ci.len = 0;
+					ci.tgt = 0;
 				}
 			}
 			else if (len == 0) {
@@ -301,14 +310,12 @@ namespace clarcnet {
 
 			return SUCCESS;
 		}
-
-		std::chrono::milliseconds timeout;
 	};
 
 	class server : public peer {
 	public:
-		server(uint16_t port, std::chrono::milliseconds timeout = std::chrono::milliseconds(0)) {
-			this->timeout = timeout;
+		server(uint16_t port, ms ping_period = ms(5000)) {
+			this->ping_period = ping_period;
 
 			int err;
 			socklen_t val;
@@ -352,7 +359,6 @@ namespace clarcnet {
 		}
 
 		packets process() {
-
 			packets ret;
 
 			sockaddr_storage client;
@@ -365,7 +371,7 @@ namespace clarcnet {
 					thr;
 				}
 			} else {
-				conns.insert(std::make_pair(client_fd, packet_buffer()));
+				conns.insert(std::make_pair(client_fd, client_info()));
 				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), conns[client_fd].addr_str, sizeof conns[client_fd].addr_str);
 
 				int err = fcntl(client_fd, F_SETFL, O_NONBLOCK);
@@ -374,14 +380,29 @@ namespace clarcnet {
 				ret.push_back(packet(client_fd, ID_CONNECTION));
 			}
 
-			for (auto fd_to_pb = conns.begin(); fd_to_pb != conns.end();) {
-				auto code = receive(fd_to_pb->first, fd_to_pb->second, ret);
+			tp now = clk::now();
+
+			for (auto fd_to_ci = conns.begin(); fd_to_ci != conns.end();) {
+				int cfd = fd_to_ci->first;
+				client_info& ci = fd_to_ci->second;
+
+				if (now - ci.last_ping >= ping_period) {
+					packet ping = packet(cfd, ID_PING);
+					if (send(cfd, ping) != SUCCESS) {
+						close(cfd);
+						fd_to_ci = conns.erase(fd_to_ci);
+						continue;
+					}
+					ci.last_ping = now;
+				}
+
+				auto code = receive(cfd, ci, ret);
 				switch (code) {
 					case DISCONNECTED:
 					{
-						ret.push_back(packet(fd_to_pb->first, ID_DISCONNECTION));
-						close(fd_to_pb->first);
-						fd_to_pb = conns.erase(fd_to_pb);
+						ret.push_back(packet(cfd, ID_DISCONNECTION));
+						close(cfd);
+						fd_to_ci = conns.erase(fd_to_ci);
 						continue;
 					}
 					break;
@@ -389,23 +410,24 @@ namespace clarcnet {
 					default:
 					break;
 				}
-				++fd_to_pb;
+				++fd_to_ci;
 			}
 
 			return ret;
 		}
 
-		std::string address(int fd) { auto fd_to_pb = conns.find(fd); return fd_to_pb == conns.end() ? "" : fd_to_pb->second.addr_str; }
+		std::string address(int cfd) { auto fd_to_ci = conns.find(cfd); return fd_to_ci == conns.end() ? "" : fd_to_ci->second.addr_str; }
 
 		char addr_str[INET6_ADDRSTRLEN];
 
 	protected:
-		std::unordered_map<int, packet_buffer> conns;
+		std::unordered_map<int, client_info> conns;
+		ms ping_period;
 	};
 
 	class client : public peer {
 	public:
-		client(std::string const& host, uint16_t port, std::chrono::milliseconds timeout = std::chrono::milliseconds(0)) {
+		client(std::string const& host, uint16_t port, ms timeout = ms(0)) {
 			addrinfo hints    = {};
 			hints.ai_family   = AF_UNSPEC;
 			hints.ai_socktype = SOCK_STREAM;
@@ -430,7 +452,7 @@ namespace clarcnet {
 				thr;
 			}
 
-			this->conn_start = std::chrono::high_resolution_clock::now();
+			this->conn_start = clk::now();
 			this->connected  = false;
 			this->timeout    = timeout;
 		}
@@ -446,9 +468,9 @@ namespace clarcnet {
 
 			if (!connected) {
 
-				if (timeout != std::chrono::milliseconds(0)) {
-					auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
-						std::chrono::high_resolution_clock::now() - this->conn_start);
+				if (timeout != ms(0)) {
+					auto waited = std::chrono::duration_cast<ms>(
+						clk::now() - this->conn_start);
 					if (waited >= timeout) {
 						ret.push_back(packet(fd, ID_TIMEOUT));
 						return ret;
@@ -486,7 +508,7 @@ namespace clarcnet {
 				return ret;
 			}
 
-			auto code = receive(fd, pb, ret);
+			auto code = receive(fd, ci, ret);
 			switch (code) {
 				case DISCONNECTED:
 				{
@@ -504,10 +526,10 @@ namespace clarcnet {
 		}
 
 	protected:
-		std::chrono::time_point<std::chrono::high_resolution_clock> conn_start;
-
+		tp            conn_start;
 		bool      		connected;
 		addrinfo* 		res;
-		packet_buffer pb;
+		client_info   ci;
+		ms            timeout;
 	};
 }
