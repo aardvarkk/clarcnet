@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <cassert>
+#include <chrono>
 #include <cstring>
 #include <errno.h>
 #include <netdb.h>
@@ -44,19 +45,17 @@ namespace clarcnet {
 
 	enum msg_id : msg_id_t {
 		ID_UNKNOWN,
-		ID_CONNECTION_ACCEPTED,
-		ID_CONNECTION_FAILED,
+		ID_CONNECTION,
 		ID_DISCONNECTION,
-		ID_STRING,
+		ID_TIMEOUT,
 		ID_USER
 	};
 
 	static const char* _msg_strs[] = {
 		"ID_UNKNOWN",
-		"ID_CONNECTION_ACCEPTED",
-		"ID_CONNECTION_FAILED",
+		"ID_CONNECTION",
 		"ID_DISCONNECTION",
-		"ID_STRING",
+		"ID_TIMEOUT",
 		"ID_USER"
 	};
 
@@ -302,11 +301,15 @@ namespace clarcnet {
 
 			return SUCCESS;
 		}
+
+		std::chrono::milliseconds timeout;
 	};
 
 	class server : public peer {
 	public:
-		server(uint16_t port) {
+		server(uint16_t port, std::chrono::milliseconds timeout = std::chrono::milliseconds(0)) {
+			this->timeout = timeout;
+
 			int err;
 			socklen_t val;
 
@@ -368,7 +371,7 @@ namespace clarcnet {
 				int err = fcntl(client_fd, F_SETFL, O_NONBLOCK);
 				chk(err);
 
-				ret.push_back(packet(client_fd, ID_CONNECTION_ACCEPTED));
+				ret.push_back(packet(client_fd, ID_CONNECTION));
 			}
 
 			for (auto fd_to_pb = conns.begin(); fd_to_pb != conns.end();) {
@@ -402,9 +405,7 @@ namespace clarcnet {
 
 	class client : public peer {
 	public:
-		client(std::string const& host, uint16_t port) {
-			connected = false;
-
+		client(std::string const& host, uint16_t port, std::chrono::milliseconds timeout = std::chrono::milliseconds(0)) {
 			addrinfo hints    = {};
 			hints.ai_family   = AF_UNSPEC;
 			hints.ai_socktype = SOCK_STREAM;
@@ -428,6 +429,10 @@ namespace clarcnet {
 			if (err < 0 && errno != EINPROGRESS) {
 				thr;
 			}
+
+			this->conn_start = std::chrono::high_resolution_clock::now();
+			this->connected  = false;
+			this->timeout    = timeout;
 		}
 
 		packets process() {
@@ -440,6 +445,16 @@ namespace clarcnet {
 			}
 
 			if (!connected) {
+
+				if (timeout != std::chrono::milliseconds(0)) {
+					auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+						std::chrono::high_resolution_clock::now() - this->conn_start);
+					if (waited >= timeout) {
+						ret.push_back(packet(fd, ID_TIMEOUT));
+						return ret;
+					}
+				}
+
 				pollfd ufds;
 				ufds.fd = fd;
 				ufds.events = POLLOUT;
@@ -462,10 +477,11 @@ namespace clarcnet {
 					}
 				}
 
-				connected = true;
+				this->connected = true;
+
 				freeaddrinfo(res);
 
-				ret.push_back(packet(fd, ID_CONNECTION_ACCEPTED));
+				ret.push_back(packet(fd, ID_CONNECTION));
 
 				return ret;
 			}
@@ -488,6 +504,8 @@ namespace clarcnet {
 		}
 
 	protected:
+		std::chrono::time_point<std::chrono::high_resolution_clock> conn_start;
+
 		bool      		connected;
 		addrinfo* 		res;
 		packet_buffer pb;

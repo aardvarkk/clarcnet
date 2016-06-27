@@ -22,7 +22,7 @@ int main(int argc, char* argv[]) {
 
 		for (auto const& p : ps) {
 			switch (p[_msg_type]) {
-				case ID_CONNECTION_ACCEPTED:
+				case ID_CONNECTION:
 				{
 					std::cout << "client " << p.fd << " connected from " << sv.address(p.fd) << std::endl;
 				}
@@ -34,9 +34,9 @@ int main(int argc, char* argv[]) {
 				}
 				break;
 
-				case ID_STRING:
+				case ID_USER:
 				{
-					std::cout << "client " << p.fd << " sent STRING of size " << p.size() << std::endl;
+					std::cout << "client " << p.fd << " sent user data of size " << p.size() << std::endl;
 					// for (auto i = _msg_start; i < p.size(); ++i)
 						// std::cout << p[i];
 					// std::cout << std::endl;
