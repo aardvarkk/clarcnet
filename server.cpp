@@ -9,7 +9,10 @@
 using namespace clarcnet;
 
 int main(int argc, char* argv[]) {
+
 	auto sv = server(1111);
+	std::cout << "created server at " << sv.addr_str << std::endl;
+
 	for (;;) {
 		auto ps = sv.process();
 
@@ -21,7 +24,7 @@ int main(int argc, char* argv[]) {
 			switch (p[_msg_type]) {
 				case ID_CONNECTION_ACCEPTED:
 				{
-					std::cout << "client " << p.fd << " connected" << std::endl;
+					std::cout << "client " << p.fd << " connected from " << sv.address(p.fd) << std::endl;
 				}
 				break;
 

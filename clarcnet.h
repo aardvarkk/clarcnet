@@ -196,6 +196,7 @@ namespace clarcnet {
 
 	struct packet_buffer {
 	public:
+		char      addr_str[INET6_ADDRSTRLEN];
 		buffer    buf;
 		packet_sz len;
 		packet_sz tgt;
@@ -321,6 +322,8 @@ namespace clarcnet {
 			fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 			chk(fd);
 
+			inet_ntop(res->ai_family, in_addr(res->ai_addr), addr_str, sizeof addr_str);
+
 			err = fcntl(fd, F_SETFL, O_NONBLOCK);
 			chk(err);
 
@@ -359,10 +362,12 @@ namespace clarcnet {
 					thr;
 				}
 			} else {
+				conns.insert(std::make_pair(client_fd, packet_buffer()));
+				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), conns[client_fd].addr_str, sizeof conns[client_fd].addr_str);
+
 				int err = fcntl(client_fd, F_SETFL, O_NONBLOCK);
 				chk(err);
 
-				conns[client_fd];
 				ret.push_back(packet(client_fd, ID_CONNECTION_ACCEPTED));
 			}
 
@@ -386,6 +391,10 @@ namespace clarcnet {
 
 			return ret;
 		}
+
+		std::string address(int fd) { auto fd_to_pb = conns.find(fd); return fd_to_pb == conns.end() ? "" : fd_to_pb->second.addr_str; }
+
+		char addr_str[INET6_ADDRSTRLEN];
 
 	protected:
 		std::unordered_map<int, packet_buffer> conns;
