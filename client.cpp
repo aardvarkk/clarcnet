@@ -6,7 +6,7 @@
 using namespace clarcnet;
 
 int main(int argc, char* argv[]) {
-	auto cl = client("localhost", 1111, std::chrono::milliseconds(5000));
+	auto cl = client("localhost", 1111, clarcnet::ms(10000));
 
 	for (;;) {
 
@@ -54,11 +54,7 @@ int main(int argc, char* argv[]) {
 					std::cout << "timed out" << std::endl;
 					return EXIT_FAILURE;
 				}
-
-				case ID_PING:
-				{
-					std::cout << "ping" << std::endl;
-				}
+				break;
 			}
 		}
 	}
