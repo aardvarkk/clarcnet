@@ -200,7 +200,7 @@ namespace clarcnet {
 
 	struct client_info {
 	public:
-		client_info() : buf(_msg_start, 0), len(0), tgt(0), last_ping(clk::now()) {}
+		client_info() : buf(_msg_start, 0), last_ping(clk::now()), len(0), tgt(0) { std::fill(addr_str, addr_str + sizeof addr_str, 0); }
 
 		char      addr_str[INET6_ADDRSTRLEN];
 		buffer    buf;
