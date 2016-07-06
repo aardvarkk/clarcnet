@@ -328,7 +328,7 @@ namespace clarcnet {
 
 	class server : public peer {
 	public:
-		server(uint16_t port, ms heartbeat_period = ms(5000), ms timeout = ms(10000)) {
+		server(uint16_t port, ms heartbeat_period = ms(4000), ms timeout = ms(15000)) {
 			this->heartbeat_period = heartbeat_period;
 			this->timeout = timeout;
 
