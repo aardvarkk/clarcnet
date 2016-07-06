@@ -247,7 +247,6 @@ namespace clarcnet {
 			if (fd >= 0) {
 				int err = ::close(fd);
 				if (err < 0 && errno != EBADF) thr;
-				fd = -1;
 				return SUCCESS;
 			} else {
 				return DISCONNECTED;
