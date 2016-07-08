@@ -206,7 +206,7 @@ namespace clarcnet {
 		packet_sz len;
 		packet_sz tgt;
 	};
-	
+
 	struct client_info : public packet_buffer {
 	public:
 		client_info() :
@@ -290,6 +290,9 @@ namespace clarcnet {
 
 					if (!pb.tgt || (pb.len + len < pb.tgt)) {
 						pb.len += len;
+						if (off) {
+							std::copy(&b[off], &b[off+pb->len], &b[0]);
+						}
 						return SUCCESS;
 					}
 
@@ -560,7 +563,7 @@ namespace clarcnet {
 
 			if (!ret.empty())
 				last_packet_recv = clk::now();
-			
+
 			for (auto const& p : ret) {
 				if (p[_msg_type] != ID_HEARTBEAT) continue;
 				packet heartbeat(fd, ID_HEARTBEAT);
