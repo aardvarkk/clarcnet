@@ -239,7 +239,7 @@ namespace clarcnet {
 			ssize_t len = ::send(fd, &p[0], p.size(), 0);
 
 			if (len > 0) return SUCCESS;
-			else if (len == ECONNRESET) return DISCONNECTED;
+			else if (len == ECONNRESET || len == EBADF) return DISCONNECTED;
 			else thr;
 		}
 
@@ -291,7 +291,7 @@ namespace clarcnet {
 					if (!pb.tgt || (pb.len + len < pb.tgt)) {
 						pb.len += len;
 						if (off) {
-							std::copy(&b[off], &b[off+pb->len], &b[0]);
+							std::copy(&b[off], &b[off+pb.len], &b[0]);
 						}
 						return SUCCESS;
 					}
