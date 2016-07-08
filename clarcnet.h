@@ -231,70 +231,6 @@ namespace clarcnet {
 	class peer {
 	public:
 
-		packets process() {
-
-			packets ret;
-
-			std::unique_lock<std::mutex> lk(mtx);
-			cv.wait(lk, [this]{ return !received.empty(); });
-			ret = received;
-			received.clear();
-
-			return ret;
-
-			// tp now = clk::now();
-
-			// for (auto fd_to_ci = conns.begin(); fd_to_ci != conns.end();) {
-			// 	int cfd = fd_to_ci->first;
-			// 	client_info& ci = fd_to_ci->second;
-
-			// 	// if (now - ci.last_packet_sent >= heartbeat_period) {
-			// 	// 	packet heartbeat = packet(cfd, ID_HEARTBEAT);
-			// 	// 	if (send(cfd, heartbeat) != SUCCESS) {
-			// 	// 		close(cfd);
-			// 	// 		fd_to_ci = conns.erase(fd_to_ci);
-			// 	// 		continue;
-			// 	// 	}
-			// 	// 	ci.last_packet_sent = now;
-			// 	// }
-
-			// 	auto code = peer::receive(cfd, ci, ret);
-			// 	switch (code) {
-			// 		case DISCONNECTED:
-			// 		{
-			// 			ret.push_back(packet(cfd, ID_DISCONNECTION));
-			// 			close(cfd);
-			// 			fd_to_ci = conns.erase(fd_to_ci);
-			// 			continue;
-			// 		}
-			// 		break;
-
-			// 		default:
-			// 		break;
-			// 	}
-
-				// if (!ret.empty())
-				// 	ci.last_packet_recv = now;
-
-				// if (now - ci.last_packet_recv > timeout) {
-				// 	ret.push_back(packet(cfd, ID_TIMEOUT));
-				// 	close(cfd);
-				// 	fd_to_ci = conns.erase(fd_to_ci);
-				// 	continue;
-				// }
-
-				// ret.erase(std::remove_if(
-				// 	ret.begin(),
-				// 	ret.end(),
-				// 	[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
-				// 	), ret.end());
-
-			// 	++fd_to_ci;
-			// }
-
-			// return ret;
-		}
-
 		void close(int fd) {
 			int err = ::close(fd);
 			return;
@@ -359,6 +295,7 @@ namespace clarcnet {
 						{
 							std::lock_guard<std::mutex> lk(mtx);
 							received.push_back(p);
+							cv.notify_all();
 						}
 
 						len -= pb->tgt - pb->len;
@@ -372,20 +309,20 @@ namespace clarcnet {
 					goto disconnect;
 				}
 				else {
-					if (errno == ECONNRESET || errno == ETIMEDOUT) {
+					if (errno == ECONNRESET || errno == ETIMEDOUT || errno == EBADF) {
 						goto disconnect;
 					} else {
 						thr;
 					}
 				}
-
-				cv.notify_all();
 			}
 
 			disconnect:
+			{
 				std::lock_guard<std::mutex> lk(mtx);
 				received.push_back(packet(fd, ID_DISCONNECTION));
 				cv.notify_all();
+			}
 		}
 
 		std::condition_variable cv;
@@ -437,6 +374,70 @@ namespace clarcnet {
 
 		~server() {
 			// TODO: join the accept/receive threads
+		}
+
+		packets process() {
+
+			packets ret;
+
+			std::unique_lock<std::mutex> lk(mtx);
+			cv.wait(lk, [this]{ return !received.empty(); });
+			ret = received;
+			received.clear();
+
+			return ret;
+
+			// tp now = clk::now();
+
+			// for (auto fd_to_ci = conns.begin(); fd_to_ci != conns.end();) {
+			// 	int cfd = fd_to_ci->first;
+			// 	client_info& ci = fd_to_ci->second;
+
+			// 	// if (now - ci.last_packet_sent >= heartbeat_period) {
+			// 	// 	packet heartbeat = packet(cfd, ID_HEARTBEAT);
+			// 	// 	if (send(cfd, heartbeat) != SUCCESS) {
+			// 	// 		close(cfd);
+			// 	// 		fd_to_ci = conns.erase(fd_to_ci);
+			// 	// 		continue;
+			// 	// 	}
+			// 	// 	ci.last_packet_sent = now;
+			// 	// }
+
+			// 	auto code = peer::receive(cfd, ci, ret);
+			// 	switch (code) {
+			// 		case DISCONNECTED:
+			// 		{
+			// 			ret.push_back(packet(cfd, ID_DISCONNECTION));
+			// 			close(cfd);
+			// 			fd_to_ci = conns.erase(fd_to_ci);
+			// 			continue;
+			// 		}
+			// 		break;
+
+			// 		default:
+			// 		break;
+			// 	}
+
+				// if (!ret.empty())
+				// 	ci.last_packet_recv = now;
+
+				// if (now - ci.last_packet_recv > timeout) {
+				// 	ret.push_back(packet(cfd, ID_TIMEOUT));
+				// 	close(cfd);
+				// 	fd_to_ci = conns.erase(fd_to_ci);
+				// 	continue;
+				// }
+
+				// ret.erase(std::remove_if(
+				// 	ret.begin(),
+				// 	ret.end(),
+				// 	[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
+				// 	), ret.end());
+
+			// 	++fd_to_ci;
+			// }
+
+			// return ret;
 		}
 
 		std::string address(int cfd) { auto fd_to_ci = conns.find(cfd); return fd_to_ci == conns.end() ? "" : fd_to_ci->second.addr_str; }
@@ -518,13 +519,13 @@ namespace clarcnet {
 		packets process() {
 
 			packets ret;
-
+			
 			if (!connected) {
 
 				pollfd ufds;
 				ufds.fd     = fd;
 				ufds.events = POLLOUT;
-				int err = poll(&ufds, 1, timeout.count());
+				int err = poll(&ufds, 1, static_cast<int>(timeout.count()));
 				chk(err);
 
 				if (!(ufds.revents & POLLOUT)) {
@@ -538,14 +539,14 @@ namespace clarcnet {
 				chk(err);
 				chk(val);
 
-				std::lock_guard<std::mutex> lk(mtx);
-				received.push_back(packet(fd, ID_CONNECTION));
-				t_recv = new std::thread(&client::receive, this, fd, &pb);
-				cv.notify_all();
+				ret.push_back(packet(fd, ID_CONNECTION));
 
 				connected = true;
-
-				return ret;
+			} else {
+				receive(fd, &pb);
+				std::unique_lock<std::mutex> lk(mtx);
+				ret = received;
+				received.clear();
 			}
 
 			// auto code = receive(fd, pb, ret);
@@ -585,7 +586,7 @@ namespace clarcnet {
 			// 	[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
 			// 	), ret.end());
 
-			return peer::process();
+			return ret;
 		}
 
 	protected:
@@ -595,6 +596,5 @@ namespace clarcnet {
 		packet_buffer pb;
 		addrinfo* 		res;
 		ms            timeout;
-		std::thread*  t_recv;
 	};
 }
