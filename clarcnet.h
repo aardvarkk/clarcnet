@@ -7,6 +7,7 @@
 #include <cstring>
 #include <errno.h>
 #include <iostream>
+#include <mutex>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdexcept>
@@ -17,21 +18,22 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <set>
+#include <thread>
 #include <unistd.h>
 #include <unordered_map>
 #include <vector>
 
 namespace clarcnet {
 
-	// #define thr \
-	// 	throw std::runtime_error(\
-	// 			std::string(__FILE__) + ":" +\
-	// 			std::to_string(__LINE__) + " " +\
-	// 			std::string(strerror(errno)));
-
 	#define thr \
 		throw std::runtime_error(\
+				std::string(__FILE__) + ":" +\
+				std::to_string(__LINE__) + " " +\
 				std::string(strerror(errno)));
+
+	// #define thr \
+	// 	throw std::runtime_error(\
+	// 			std::string(strerror(errno)));
 
 	#define chk(val) \
 	{\
@@ -39,6 +41,8 @@ namespace clarcnet {
 			thr;\
 		}\
 	}
+
+	// #define log(x) { std::lock_guard<std::mutex> lk(mtx); x; }
 
 	typedef uint16_t                           arr_len;
 	typedef std::vector<uint8_t>               buffer;
@@ -206,7 +210,7 @@ namespace clarcnet {
 		packet_sz len;
 		packet_sz tgt;
 	};
-	
+
 	struct client_info : public packet_buffer {
 	public:
 		client_info() :
@@ -216,41 +220,84 @@ namespace clarcnet {
 			std::fill(addr_str, addr_str + sizeof addr_str, 0);
 		}
 
-		char addr_str[INET6_ADDRSTRLEN];
-		tp   last_packet_sent;
-		tp   last_packet_recv;
+		char         addr_str[INET6_ADDRSTRLEN];
+		tp           last_packet_sent;
+		tp           last_packet_recv;
+		std::thread* t_recv;
 	};
 
 	typedef std::unordered_map<int, client_info> conn_map;
 
-	enum ret_code {
-		SUCCESS,
-		FAILURE,
-		DISCONNECTED
-	};
-
 	class peer {
 	public:
 
-		ret_code send(int fd, packet& p) {
-			if (p.empty() || p.size() > _max_packet_sz) return FAILURE;
+		packets process() {
 
-			*(packet_sz*)&p[0] = htonl(p.size());
-			ssize_t len = ::send(fd, &p[0], p.size(), 0);
+			packets ret;
 
-			if (len > 0) return SUCCESS;
-			else if (len == ECONNRESET) return DISCONNECTED;
-			else thr;
+			std::unique_lock<std::mutex> lk(mtx);
+			cv.wait(lk, [this]{ return !received.empty(); });
+			ret = received;
+			received.clear();
+
+			return ret;
+
+			// tp now = clk::now();
+
+			// for (auto fd_to_ci = conns.begin(); fd_to_ci != conns.end();) {
+			// 	int cfd = fd_to_ci->first;
+			// 	client_info& ci = fd_to_ci->second;
+
+			// 	// if (now - ci.last_packet_sent >= heartbeat_period) {
+			// 	// 	packet heartbeat = packet(cfd, ID_HEARTBEAT);
+			// 	// 	if (send(cfd, heartbeat) != SUCCESS) {
+			// 	// 		close(cfd);
+			// 	// 		fd_to_ci = conns.erase(fd_to_ci);
+			// 	// 		continue;
+			// 	// 	}
+			// 	// 	ci.last_packet_sent = now;
+			// 	// }
+
+			// 	auto code = peer::receive(cfd, ci, ret);
+			// 	switch (code) {
+			// 		case DISCONNECTED:
+			// 		{
+			// 			ret.push_back(packet(cfd, ID_DISCONNECTION));
+			// 			close(cfd);
+			// 			fd_to_ci = conns.erase(fd_to_ci);
+			// 			continue;
+			// 		}
+			// 		break;
+
+			// 		default:
+			// 		break;
+			// 	}
+
+				// if (!ret.empty())
+				// 	ci.last_packet_recv = now;
+
+				// if (now - ci.last_packet_recv > timeout) {
+				// 	ret.push_back(packet(cfd, ID_TIMEOUT));
+				// 	close(cfd);
+				// 	fd_to_ci = conns.erase(fd_to_ci);
+				// 	continue;
+				// }
+
+				// ret.erase(std::remove_if(
+				// 	ret.begin(),
+				// 	ret.end(),
+				// 	[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
+				// 	), ret.end());
+
+			// 	++fd_to_ci;
+			// }
+
+			// return ret;
 		}
 
-		ret_code close(int fd) {
-			if (fd >= 0) {
-				int err = ::close(fd);
-				if (err < 0 && errno != EBADF) thr;
-				return SUCCESS;
-			} else {
-				return DISCONNECTED;
-			}
+		void close(int fd) {
+			int err = ::close(fd);
+			return;
 		}
 
 		int fd;
@@ -265,64 +312,85 @@ namespace clarcnet {
 			}
 		}
 
-		ret_code receive(int fd, packet_buffer& pb, packets& ps) {
+		ssize_t send(int fd, packet& p) {
+			if (p.empty() || p.size() > _max_packet_sz) return 0;
 
-			buffer& b = pb.buf;
+			*(packet_sz*)&p[0] = htonl(p.size());
 
-			if (b.size() - pb.len == 0)
-				b.resize(b.size() * 2);
+			return ::send(fd, &p[0], p.size(), 0);
+		}
 
-			ssize_t len = recv(fd, &b[pb.len], b.size() - pb.len, 0);
-			if (len > 0) {
-				int off = 0;
-				while (len) {
+		void receive(int fd, packet_buffer* pb) {
+			for (;;) {
 
-					if (!pb.tgt && (pb.len + len >= sizeof(pb.tgt))) {
-						pb.tgt = ntohl(*(packet_sz*)&b[off]);
+				buffer& b = pb->buf;
+				if (b.size() - pb->len == 0)
+					b.resize(b.size() * 2);
 
-						if (pb.tgt > _max_packet_sz) {
-							return DISCONNECTED;
+				ssize_t len = recv(fd, &b[pb->len], b.size() - pb->len, 0);
+
+				if (len > 0) {
+					int off = 0;
+					while (len) {
+
+						if (!pb->tgt && (pb->len + len >= sizeof(pb->tgt))) {
+							pb->tgt = ntohl(*(packet_sz*)&b[off]);
+
+							if (pb->tgt > _max_packet_sz) goto disconnect;
+
+							pb->len += sizeof pb->tgt;
+							len     -= sizeof pb->tgt;
 						}
 
-						pb.len += sizeof pb.tgt;
-						len    -= sizeof pb.tgt;
+						if (!pb->tgt || (pb->len + len < pb->tgt)) {
+							pb->len += len;
+							if (off) {
+								std::copy(&b[off], &b[off+pb->len], &b[0]);
+							}
+							len = 0;
+							continue;
+						}
+
+						packet p;
+						p.fd = fd;
+						p.clear();
+						p.insert(p.end(), b.begin() + off, b.begin() + off + pb->tgt);
+
+						{
+							std::lock_guard<std::mutex> lk(mtx);
+							received.push_back(p);
+						}
+
+						len -= pb->tgt - pb->len;
+						off += pb->tgt;
+
+						pb->len = 0;
+						pb->tgt = 0;
 					}
-
-					if (!pb.tgt || (pb.len + len < pb.tgt)) {
-						pb.len += len;
-						return SUCCESS;
+				}
+				else if (len == 0) {
+					goto disconnect;
+				}
+				else {
+					if (errno == ECONNRESET || errno == ETIMEDOUT) {
+						goto disconnect;
+					} else {
+						thr;
 					}
-
-					packet p;
-					p.fd = fd;
-					p.clear();
-					p.insert(p.end(), b.begin() + off, b.begin() + off + pb.tgt);
-					ps.push_back(p);
-
-					len -= pb.tgt - pb.len;
-					assert(len >= 0);
-					off += pb.tgt;
-
-					pb.len = 0;
-					pb.tgt = 0;
 				}
-			}
-			else if (len == 0) {
-				return DISCONNECTED;
-			}
-			else {
-				if (errno == ECONNRESET || errno == ETIMEDOUT) {
-					return DISCONNECTED;
-				}
-				else if (errno == EAGAIN || errno == EWOULDBLOCK) {
 
-				} else {
-					thr;
-				}
+				cv.notify_all();
 			}
 
-			return SUCCESS;
+			disconnect:
+				std::lock_guard<std::mutex> lk(mtx);
+				received.push_back(packet(fd, ID_DISCONNECTION));
+				cv.notify_all();
 		}
+
+		std::condition_variable cv;
+		std::mutex              mtx;
+		packets                 received;
 	};
 
 	class server : public peer {
@@ -348,19 +416,12 @@ namespace clarcnet {
 
 			inet_ntop(res->ai_family, in_addr(res->ai_addr), addr_str, sizeof addr_str);
 
-			err = fcntl(fd, F_SETFL, O_NONBLOCK);
-			chk(err);
-
 			val = 0;
 			err = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
 			chk(err);
 
 			val = 1;
 			err = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
-			chk(err);
-
-			val = 1;
-			err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 			chk(err);
 
 			err = bind(fd, res->ai_addr, res->ai_addrlen);
@@ -370,98 +431,51 @@ namespace clarcnet {
 			chk(err);
 
 			freeaddrinfo(res);
+
+			t_accept = new std::thread(&server::accept, this);
 		}
 
-		packets process() {
-			packets ret;
-
-			sockaddr_storage client;
-			socklen_t sz = sizeof client;
-			int client_fd = accept(fd, (sockaddr*)&client, &sz);
-			if (client_fd < 0) {
-				if (errno == EAGAIN || errno == EWOULDBLOCK) {
-
-				} else {
-					thr;
-				}
-			} else {
-				conns.insert(std::make_pair(client_fd, client_info()));
-				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), conns[client_fd].addr_str, sizeof conns[client_fd].addr_str);
-
-				int err = fcntl(client_fd, F_SETFL, O_NONBLOCK);
-				chk(err);
-
-				ret.push_back(packet(client_fd, ID_CONNECTION));
-			}
-
-			tp now = clk::now();
-
-			for (auto fd_to_ci = conns.begin(); fd_to_ci != conns.end();) {
-				int cfd = fd_to_ci->first;
-				client_info& ci = fd_to_ci->second;
-
-				if (now - ci.last_packet_sent >= heartbeat_period) {
-					packet heartbeat = packet(cfd, ID_HEARTBEAT);
-					if (send(cfd, heartbeat) != SUCCESS) {
-						close(cfd);
-						fd_to_ci = conns.erase(fd_to_ci);
-						continue;
-					}
-					ci.last_packet_sent = now;
-				}
-
-				auto code = receive(cfd, ci, ret);
-				switch (code) {
-					case DISCONNECTED:
-					{
-						ret.push_back(packet(cfd, ID_DISCONNECTION));
-						close(cfd);
-						fd_to_ci = conns.erase(fd_to_ci);
-						continue;
-					}
-					break;
-
-					default:
-					break;
-				}
-
-				if (!ret.empty())
-					ci.last_packet_recv = now;
-
-				if (now - ci.last_packet_recv > timeout) {
-					ret.push_back(packet(cfd, ID_TIMEOUT));
-					close(cfd);
-					fd_to_ci = conns.erase(fd_to_ci);
-					continue;
-				}
-
-				ret.erase(std::remove_if(
-					ret.begin(),
-					ret.end(),
-					[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
-					), ret.end());
-
-				++fd_to_ci;
-			}
-
-			return ret;
+		~server() {
+			// TODO: join the accept/receive threads
 		}
 
 		std::string address(int cfd) { auto fd_to_ci = conns.find(cfd); return fd_to_ci == conns.end() ? "" : fd_to_ci->second.addr_str; }
 
+		ssize_t send(int fd, packet& p) { return peer::send(fd, p); }
+
 		char addr_str[INET6_ADDRSTRLEN];
 
 	protected:
-		conn_map conns;
-		ms       heartbeat_period;
-		ms       timeout;
+
+		void accept() {
+			for (;;) {
+				sockaddr_storage client;
+				socklen_t sz = sizeof client;
+				int client_fd = ::accept(fd, (sockaddr*)&client, &sz);
+				chk(client_fd);
+
+				std::lock_guard<std::mutex> lk(mtx);
+
+				client_info& ci = conns[client_fd];
+				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), ci.addr_str, sizeof ci.addr_str);
+				received.push_back(packet(client_fd, ID_CONNECTION));
+				ci.t_recv = new std::thread(&server::receive, this, client_fd, &ci);
+				cv.notify_all();
+			}
+		}
+
+		conn_map     conns;
+		ms           heartbeat_period;
+		ms           timeout;
+		std::thread* t_accept;
 	};
 
 	class client : public peer {
 	public:
+
 		client(std::string const& host, uint16_t port, ms timeout = ms(0)) : last_packet_recv(clk::now()) {
-			this->conn_start  = clk::now();
 			this->connected   = false;
+			this->conn_start  = clk::now();
 			this->timeout     = timeout;
 
 			addrinfo hints    = {};
@@ -476,51 +490,45 @@ namespace clarcnet {
 			fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 			chk(fd);
 
-			err = fcntl(fd, F_SETFL, O_NONBLOCK);
-			chk(err);
+			int opts = fcntl(fd, F_GETFL);
 
-			socklen_t val = 1;
-			err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
+			err = fcntl(fd, F_SETFL, opts | O_NONBLOCK);
 			chk(err);
 
 			err = connect(fd, res->ai_addr, res->ai_addrlen);
 			if (err < 0 && errno != EINPROGRESS) {
-				thr;
-			}
+        thr;
+      }
+
+			freeaddrinfo(res);
+
+      err = fcntl(fd, F_SETFL, opts & ~O_NONBLOCK);
+      chk(err);
+		}
+
+		ssize_t send(packet& p) {
+			return peer::send(fd, p);
 		}
 
 		void disconnect() {
 			close(fd);
 			fd = -1;
-			connected = false;
 		}
 
 		packets process() {
 
 			packets ret;
 
-			if (fd < 0) {
-				ret.push_back(packet(fd, ID_DISCONNECTION));
-				return ret;
-			}
-
 			if (!connected) {
 
-				if (timeout != ms(0)) {
-					auto waited = std::chrono::duration_cast<ms>(clk::now() - conn_start);
-					if (waited >= timeout) {
-						ret.push_back(packet(fd, ID_TIMEOUT));
-						return ret;
-					}
-				}
-
 				pollfd ufds;
-				ufds.fd = fd;
+				ufds.fd     = fd;
 				ufds.events = POLLOUT;
-				int err = poll(&ufds, 1, 0);
+				int err = poll(&ufds, 1, timeout.count());
 				chk(err);
 
 				if (!(ufds.revents & POLLOUT)) {
+					ret.push_back(packet(fd, ID_TIMEOUT));
 					return ret;
 				}
 
@@ -528,69 +536,65 @@ namespace clarcnet {
 				socklen_t val_sz = sizeof val;
 				err = getsockopt(fd, SOL_SOCKET, SO_ERROR, &val, &val_sz);
 				chk(err);
-				if (val < 0) {
-					if (errno == EINPROGRESS) {
-						return ret;
-					} else {
-						thr;
-					}
-				}
+				chk(val);
+
+				std::lock_guard<std::mutex> lk(mtx);
+				received.push_back(packet(fd, ID_CONNECTION));
+				t_recv = new std::thread(&client::receive, this, fd, &pb);
+				cv.notify_all();
 
 				connected = true;
-
-				freeaddrinfo(res);
-
-				ret.push_back(packet(fd, ID_CONNECTION));
 
 				return ret;
 			}
 
-			auto code = receive(fd, pb, ret);
-			switch (code) {
-				case DISCONNECTED:
-				{
-					ret.push_back(packet(fd, ID_DISCONNECTION));
-					disconnect();
-				}
-				break;
+			// auto code = receive(fd, pb, ret);
+			// switch (code) {
+			// 	case DISCONNECTED:
+			// 	{
+			// 		ret.push_back(packet(fd, ID_DISCONNECTION));
+			// 		disconnect();
+			// 	}
+			// 	break;
 
-				default:
-				break;
-			}
+			// 	default:
+			// 	break;
+			// }
 
-			if (!ret.empty())
-				last_packet_recv = clk::now();
-			
-			for (auto const& p : ret) {
-				if (p[_msg_type] != ID_HEARTBEAT) continue;
-				packet heartbeat(fd, ID_HEARTBEAT);
-				auto code = send(fd, heartbeat);
-				if (code != SUCCESS) {
-					ret.push_back(packet(fd, ID_DISCONNECTION));
-					disconnect();
-				}
-			}
+			// if (!ret.empty())
+			// 	last_packet_recv = clk::now();
 
-			if (clk::now() - last_packet_recv > timeout) {
-				ret.push_back(packet(fd, ID_TIMEOUT));
-				disconnect();
-			}
+			// for (auto const& p : ret) {
+			// 	if (p[_msg_type] != ID_HEARTBEAT) continue;
+			// 	packet heartbeat(fd, ID_HEARTBEAT);
+			// 	auto code = send(fd, heartbeat);
+			// 	if (code != SUCCESS) {
+			// 		ret.push_back(packet(fd, ID_DISCONNECTION));
+			// 		disconnect();
+			// 	}
+			// }
 
-			ret.erase(std::remove_if(
-				ret.begin(),
-				ret.end(),
-				[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
-				), ret.end());
+			// if (clk::now() - last_packet_recv > timeout) {
+			// 	ret.push_back(packet(fd, ID_TIMEOUT));
+			// 	disconnect();
+			// }
 
-			return ret;
+			// ret.erase(std::remove_if(
+			// 	ret.begin(),
+			// 	ret.end(),
+			// 	[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
+			// 	), ret.end());
+
+			return peer::process();
 		}
 
 	protected:
+		bool          connected;
 		tp            conn_start;
-		bool      		connected;
 		tp            last_packet_recv;
 		packet_buffer pb;
 		addrinfo* 		res;
 		ms            timeout;
+		std::thread*  t_recv;
 	};
 }
