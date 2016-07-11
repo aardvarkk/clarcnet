@@ -239,7 +239,7 @@ namespace clarcnet {
 			ssize_t len = ::send(fd, &p[0], p.size(), 0);
 
 			if (len > 0) return SUCCESS;
-			else if (len == ECONNRESET || len == EBADF) return DISCONNECTED;
+			else if (len == ECONNRESET || len == EBADF || len == EPIPE) return DISCONNECTED;
 			else thr;
 		}
 
