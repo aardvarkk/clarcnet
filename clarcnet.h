@@ -9,6 +9,7 @@
 #include <iostream>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <queue>
 #include <stdexcept>
 #include <string>
 #include <sys/fcntl.h>
@@ -226,22 +227,12 @@ namespace clarcnet {
 	enum ret_code {
 		SUCCESS,
 		FAILURE,
-		DISCONNECTED
+		DISCONNECTED,
+		BUFFERED
 	};
 
 	class peer {
 	public:
-
-		ret_code send(int fd, packet& p) {
-			if (p.empty() || p.size() > _max_packet_sz) return FAILURE;
-
-			*(packet_sz*)&p[0] = htonl(p.size());
-			ssize_t len = ::send(fd, &p[0], p.size(), 0);
-
-			if (len > 0) return SUCCESS;
-			else if (len == ECONNRESET || len == EBADF || len == EPIPE) return DISCONNECTED;
-			else thr;
-		}
 
 		ret_code close(int fd) {
 			if (fd >= 0) {
@@ -265,16 +256,49 @@ namespace clarcnet {
 			}
 		}
 
+		void flush_backlog() {
+			while (!send_backlog.empty()) {
+				ret_code code = send(send_backlog.front().first, send_backlog.front().second);
+				send_backlog.pop();
+				if (code != SUCCESS) break;
+			}
+		}
+
+		ret_code send(int fd, packet& p) {
+			if (p.empty() || p.size() > _max_packet_sz) return FAILURE;
+
+			*(packet_sz*)&p[0] = htonl(p.size());
+			ssize_t len = ::send(fd, &p[0], p.size(), 0);
+
+			if (len == p.size()) {
+				return SUCCESS;
+			}
+			else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				send_backlog.push(std::make_pair(fd, p));
+				return BUFFERED;
+			}
+			else if (errno == ECONNRESET || errno == EBADF || errno == EPIPE) {
+				return DISCONNECTED;
+			}
+			else {
+				thr;
+			}
+		}
+
 		ret_code receive(int fd, packet_buffer& pb, packets& ps) {
 
 			buffer& b = pb.buf;
 
-			if (b.size() - pb.len == 0)
+			if (b.size() - pb.len == 0) {
 				b.resize(b.size() * 2);
+			}
 
 			ssize_t len = recv(fd, &b[pb.len], b.size() - pb.len, 0);
+
 			if (len > 0) {
+
 				int off = 0;
+
 				while (len) {
 
 					if (!pb.tgt && (pb.len + len >= sizeof(pb.tgt))) {
@@ -284,8 +308,8 @@ namespace clarcnet {
 							return DISCONNECTED;
 						}
 
-						pb.len += sizeof pb.tgt;
-						len    -= sizeof pb.tgt;
+						len    -= sizeof pb.tgt - pb.len;
+						pb.len  = sizeof pb.tgt;
 					}
 
 					if (!pb.tgt || (pb.len + len < pb.tgt)) {
@@ -293,6 +317,7 @@ namespace clarcnet {
 						if (off) {
 							std::copy(&b[off], &b[off+pb.len], &b[0]);
 						}
+
 						return SUCCESS;
 					}
 
@@ -326,6 +351,8 @@ namespace clarcnet {
 
 			return SUCCESS;
 		}
+
+		std::queue<std::pair<int, packet>> send_backlog;
 	};
 
 	class server : public peer {
@@ -375,7 +402,13 @@ namespace clarcnet {
 			freeaddrinfo(res);
 		}
 
+		ssize_t send(int fd, packet& p) {
+			return peer::send(fd, p);
+		}
+
 		packets process() {
+			flush_backlog();
+
 			packets ret;
 
 			sockaddr_storage client;
@@ -498,12 +531,17 @@ namespace clarcnet {
 			connected = false;
 		}
 
+		ssize_t send(packet& p) {
+			return peer::send(this->fd, p);
+		}
+
 		packets process() {
+			flush_backlog();
 
 			packets ret;
 
+			// process() called before connected
 			if (fd < 0) {
-				ret.push_back(packet(fd, ID_DISCONNECTION));
 				return ret;
 			}
 
@@ -567,14 +605,14 @@ namespace clarcnet {
 			for (auto const& p : ret) {
 				if (p[_msg_type] != ID_HEARTBEAT) continue;
 				packet heartbeat(fd, ID_HEARTBEAT);
-				auto code = send(fd, heartbeat);
+				auto code = peer::send(fd, heartbeat);
 				if (code != SUCCESS) {
 					ret.push_back(packet(fd, ID_DISCONNECTION));
 					disconnect();
 				}
 			}
 
-			if (clk::now() - last_packet_recv > timeout) {
+			if (timeout != ms(0) && clk::now() - last_packet_recv > timeout) {
 				ret.push_back(packet(fd, ID_TIMEOUT));
 				disconnect();
 			}

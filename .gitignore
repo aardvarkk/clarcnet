@@ -10,3 +10,7 @@ CTestTestfile.cmake
 # Binary files
 client
 server
+tests
+
+# CLion
+.idea/
