@@ -126,11 +126,11 @@ namespace clarcnet {
 			insert(end(), p, p + sizeof v);
 		}
 
-		float r_float(int binplcs = 4) {
+		float r_float(int binplcs = 16) {
 			return static_cast<float>(r_int32_t()) / (1<<binplcs);
 		}
 
-		void w_float(float const& v, int binplcs = 4) {
+		void w_float(float const& v, int binplcs = 16) {
 			return w_int32_t(static_cast<int32_t>(v * (1<<binplcs)));
 		}
 
