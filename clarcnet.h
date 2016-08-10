@@ -407,7 +407,8 @@ namespace clarcnet {
 			freeaddrinfo(res);
 		}
 
-		ssize_t send(int fd, packet& p) {
+		ret_code send(int fd, packet& p) {
+			if (!conns.count(fd)) return FAILURE;
 			return peer::send(fd, p);
 		}
 
