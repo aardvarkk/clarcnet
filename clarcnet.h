@@ -362,7 +362,6 @@ namespace clarcnet {
 			this->timeout = timeout;
 
 			int err;
-			socklen_t val;
 
 			addrinfo hints    = {}, *res;
 			hints.ai_family   = AF_INET6;
@@ -381,6 +380,8 @@ namespace clarcnet {
 			err = fcntl(fd, F_SETFL, O_NONBLOCK);
 			chk(err);
 
+			socklen_t val;
+
 			val = 0;
 			err = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
 			chk(err);
@@ -392,7 +393,11 @@ namespace clarcnet {
 			val = 1;
 			err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 			chk(err);
-
+			
+			val = 1;
+			err = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
+			chk(err);
+			
 			err = bind(fd, res->ai_addr, res->ai_addrlen);
 			chk(err);
 
@@ -519,10 +524,16 @@ namespace clarcnet {
 			err = fcntl(fd, F_SETFL, O_NONBLOCK);
 			chk(err);
 
-			socklen_t val = 1;
+			socklen_t val;
+			
+			val = 1;
 			err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 			chk(err);
 
+			val = 1;
+			err = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
+			chk(err);
+			
 			err = connect(fd, res->ai_addr, res->ai_addrlen);
 			if (err < 0 && errno != EINPROGRESS) {
 				thr;
