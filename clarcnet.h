@@ -413,23 +413,27 @@ namespace clarcnet {
 
 			sockaddr_storage client;
 			socklen_t sz = sizeof client;
-			int client_fd = accept(fd, (sockaddr*)&client, &sz);
-			if (client_fd < 0) {
-				if (errno == EAGAIN || errno == EWOULDBLOCK) {
-
+			
+			for (;;) {
+				int client_fd = accept(fd, (sockaddr*)&client, &sz);
+				if (client_fd < 0) {
+					if (errno == EAGAIN || errno == EWOULDBLOCK) {
+						break;
+					} else {
+						thr;
+					}
 				} else {
-					thr;
+					assert(!conns.count(client_fd));
+					conns.insert(std::make_pair(client_fd, client_info()));
+					inet_ntop(client.ss_family, in_addr((sockaddr*)&client), conns[client_fd].addr_str, sizeof conns[client_fd].addr_str);
+
+					int err = fcntl(client_fd, F_SETFL, O_NONBLOCK);
+					chk(err);
+
+					ret.push_back(packet(client_fd, ID_CONNECTION));
 				}
-			} else {
-				conns.insert(std::make_pair(client_fd, client_info()));
-				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), conns[client_fd].addr_str, sizeof conns[client_fd].addr_str);
-
-				int err = fcntl(client_fd, F_SETFL, O_NONBLOCK);
-				chk(err);
-
-				ret.push_back(packet(client_fd, ID_CONNECTION));
 			}
-
+			
 			tp now = clk::now();
 
 			for (auto fd_to_ci = conns.begin(); fd_to_ci != conns.end();) {
