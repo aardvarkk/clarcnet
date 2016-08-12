@@ -394,10 +394,6 @@ namespace clarcnet {
 			err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 			chk(err);
 			
-			val = 1;
-			err = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
-			chk(err);
-			
 			err = bind(fd, res->ai_addr, res->ai_addrlen);
 			chk(err);
 
@@ -531,10 +527,6 @@ namespace clarcnet {
 			err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 			chk(err);
 
-			val = 1;
-			err = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
-			chk(err);
-			
 			err = connect(fd, res->ai_addr, res->ai_addrlen);
 			if (err < 0 && errno != EINPROGRESS) {
 				thr;
