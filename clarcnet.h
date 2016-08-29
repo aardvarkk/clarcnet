@@ -394,6 +394,12 @@ namespace clarcnet {
 			err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 			chk(err);
 			
+			#ifdef SO_NOSIGPIPE
+			val = 1;
+			err = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
+			chk(err);
+			#endif
+			
 			err = bind(fd, res->ai_addr, res->ai_addrlen);
 			chk(err);
 
@@ -415,9 +421,11 @@ namespace clarcnet {
 
 			sockaddr_storage client;
 			socklen_t sz = sizeof client;
-			
+
 			for (;;) {
+				
 				int client_fd = accept(fd, (sockaddr*)&client, &sz);
+				
 				if (client_fd < 0) {
 					if (errno == EAGAIN || errno == EWOULDBLOCK) {
 						break;
@@ -431,11 +439,17 @@ namespace clarcnet {
 
 					int err = fcntl(client_fd, F_SETFL, O_NONBLOCK);
 					chk(err);
+					
+					#ifdef SO_NOSIGPIPE
+					socklen_t val = 1;
+					err = setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
+					chk(err);
+					#endif
 
 					ret.push_back(packet(client_fd, ID_CONNECTION));
 				}
 			}
-			
+
 			tp now = clk::now();
 
 			for (auto fd_to_ci = conns.begin(); fd_to_ci != conns.end();) {
@@ -522,10 +536,16 @@ namespace clarcnet {
 			chk(err);
 
 			socklen_t val;
-			
+
 			val = 1;
 			err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 			chk(err);
+
+			#ifdef SO_NOSIGPIPE
+			val = 1;
+			err = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
+			chk(err);
+			#endif
 
 			err = connect(fd, res->ai_addr, res->ai_addrlen);
 			if (err < 0 && errno != EINPROGRESS) {
