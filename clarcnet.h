@@ -78,6 +78,10 @@ namespace clarcnet {
 		int fd;
 		int rpos;
 
+		void reset() {
+			rpos = _msg_start;
+		}
+		
 		int8_t r_int8_t() {
 			int8_t v = this->operator[](rpos);
 			rpos += sizeof v;
