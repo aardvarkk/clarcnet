@@ -465,8 +465,7 @@ namespace clarcnet {
 				if (now - ci.last_packet_sent >= heartbeat_period) {
 					packet heartbeat = packet(cfd, ID_HEARTBEAT);
 					if (send(cfd, heartbeat) != SUCCESS) {
-						close(cfd);
-						fd_to_ci = conns.erase(fd_to_ci);
+						disconnect(cfd);
 						continue;
 					}
 					ci.last_packet_sent = now;
@@ -476,9 +475,8 @@ namespace clarcnet {
 				switch (code) {
 					case DISCONNECTED:
 					{
+						fd_to_ci = disconnect(fd_to_ci);
 						ret.push_back(packet(cfd, ID_DISCONNECTION));
-						close(cfd);
-						fd_to_ci = conns.erase(fd_to_ci);
 						continue;
 					}
 					break;
@@ -492,8 +490,7 @@ namespace clarcnet {
 
 				if (now - ci.last_packet_recv > timeout) {
 					ret.push_back(packet(cfd, ID_TIMEOUT));
-					close(cfd);
-					fd_to_ci = conns.erase(fd_to_ci);
+					fd_to_ci = disconnect(fd_to_ci);
 					continue;
 				}
 
@@ -513,10 +510,21 @@ namespace clarcnet {
 
 		char addr_str[INET6_ADDRSTRLEN];
 
+		void disconnect(int cfd) {
+			auto it = conns.find(cfd);
+			if (it == conns.end()) return;
+			disconnect(it);
+		}
+		
 	protected:
 		conn_map conns;
 		ms       heartbeat_period;
 		ms       timeout;
+
+		conn_map::iterator disconnect(conn_map::iterator conn_it) {
+			close(conn_it->first);
+			return conns.erase(conn_it);
+		}
 	};
 
 	class client : public peer {
@@ -574,7 +582,6 @@ namespace clarcnet {
 
 			packets ret;
 
-			// process() called before connected
 			if (fd < 0) {
 				return ret;
 			}
