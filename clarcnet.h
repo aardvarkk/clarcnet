@@ -10,6 +10,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <queue>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <sys/fcntl.h>
@@ -227,6 +228,13 @@ namespace clarcnet {
 	};
 
 	typedef std::unordered_map<int, client_info> conn_map;
+	
+	struct delayed_send {
+		delayed_send() : fd(-1), earliest(clk::now()) {}
+		int    fd;
+		packet p;
+		tp     earliest;
+	};
 
 	enum ret_code {
 		SUCCESS,
@@ -238,6 +246,11 @@ namespace clarcnet {
 	class peer {
 	public:
 
+		peer() : fd(-1), lag_min(ms(0)), lag_max(ms(0)) {
+			std::random_device rdev;
+			rng.seed(rdev());
+		}
+		
 		ret_code close(int fd) {
 			if (fd >= 0) {
 				int err = ::close(fd);
@@ -249,6 +262,34 @@ namespace clarcnet {
 		}
 
 		int fd;
+		ms lag_min, lag_max;
+		
+	protected:
+		std::deque<delayed_send> send_backlog;
+
+	private:
+		
+		std::default_random_engine rng;
+		
+		ret_code send_sock(int fd, packet& p) {
+			if (p.empty() || p.size() > _max_packet_sz) return FAILURE;
+
+			*(packet_sz*)&p[0] = htonl(p.size());
+			ssize_t len = ::send(fd, &p[0], p.size(), 0);
+
+			if (len == p.size()) {
+				return SUCCESS;
+			}
+			else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				return BUFFERED;
+			}
+			else if (errno == ECONNRESET || errno == ETIMEDOUT || errno == EPIPE) {
+				return DISCONNECTED;
+			}
+			else {
+				thr;
+			}
+		}
 
 	protected:
 
@@ -261,31 +302,36 @@ namespace clarcnet {
 		}
 
 		void flush_backlog() {
+			auto now = clk::now();
 			while (!send_backlog.empty()) {
-				ret_code code = send(send_backlog.front().first, send_backlog.front().second);
-				send_backlog.pop();
+				if (send_backlog.front().earliest > now) break;
+				
+				delayed_send ds = send_backlog.front();
+				ret_code code = send_sock(ds.fd, ds.p);
 				if (code != SUCCESS) break;
+				
+				send_backlog.pop_front();
 			}
 		}
 
 		ret_code send(int fd, packet& p) {
-			if (p.empty() || p.size() > _max_packet_sz) return FAILURE;
-
-			*(packet_sz*)&p[0] = htonl(p.size());
-			ssize_t len = ::send(fd, &p[0], p.size(), 0);
-
-			if (len == p.size()) {
+			if (!lag_max.count()) {
+				return send_sock(fd, p);
+			} else {
+				
+				std::uniform_int_distribution<> dist_lag(
+					static_cast<int>(lag_min.count()),
+					static_cast<int>(lag_max.count())
+				);
+				ms lag(dist_lag(rng));
+				
+				delayed_send ds;
+				ds.fd       = fd;
+				ds.p        = p;
+				ds.earliest = clk::now() + lag;
+				send_backlog.push_back(ds);
+				
 				return SUCCESS;
-			}
-			else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				send_backlog.push(std::make_pair(fd, p));
-				return BUFFERED;
-			}
-			else if (errno == ECONNRESET || errno == EBADF || errno == EPIPE) {
-				return DISCONNECTED;
-			}
-			else {
-				thr;
 			}
 		}
 
@@ -355,8 +401,6 @@ namespace clarcnet {
 
 			return SUCCESS;
 		}
-
-		std::queue<std::pair<int, packet>> send_backlog;
 	};
 
 	class server : public peer {
@@ -522,6 +566,11 @@ namespace clarcnet {
 		ms       timeout;
 
 		conn_map::iterator disconnect(conn_map::iterator conn_it) {
+			int cfd = conn_it->first;
+			send_backlog.erase(remove_if(send_backlog.begin(), send_backlog.end(),
+				[=](delayed_send const& ds) {
+					return ds.fd == cfd;
+				}), send_backlog.end());
 			close(conn_it->first);
 			return conns.erase(conn_it);
 		}
