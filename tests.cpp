@@ -1,6 +1,5 @@
 #include "clarcnet.h"
 
-#include <mutex>
 #include <thread>
 
 using namespace clarcnet;
@@ -12,7 +11,7 @@ mutex   m;
 
 #define LOG_S lock_guard<mutex> lk(m);
 
-const int _max_packet = 500;
+const int _max_packet = 50;
 
 int main(int argc, char* argv[]) {
 	thread t_s([](){
@@ -21,7 +20,7 @@ int main(int argc, char* argv[]) {
 			auto ps = sv->process();
 
 			for (auto const& p : ps) {
-				switch (p[_msg_type]) {
+				switch (p.mid) {
 					case ID_CONNECTION:
 					{
 						LOG_S;
@@ -39,7 +38,7 @@ int main(int argc, char* argv[]) {
 					case ID_USER:
 					{
 						LOG_S;
-						for (auto i = _msg_start; i < p.size(); ++i) {
+						for (auto i = 0; i < p.size(); ++i) {
 							cout << p[i];
 						}
 						cout << endl;
@@ -58,7 +57,7 @@ int main(int argc, char* argv[]) {
 			auto ps = cl->process();
 
 			for (auto const& p : ps) {
-				switch (p[_msg_type]) {
+				switch (p.mid) {
 					case ID_CONNECTION:
 					{
 						LOG_S;
@@ -79,14 +78,15 @@ int main(int argc, char* argv[]) {
 
 			if (connected) {
 				size_t els = rand() % _max_packet;
-				packet p;
-				p.resize(p.size() + els);
-				p[_msg_type] = ID_USER;
-				for (auto i = 0; i < els; ++i) p[_msg_start+i] = '0' + i % 10;
+				packet p(ID_USER);
+				p.resize(els);
+				for (auto i = 0; i < els; ++i) p[i] = '0' + i % 10;
 
 				LOG_S
 				cout << "sending " << p.size() << endl;
 				cl->send(p);
+
+				connected = !connected;
 			}
 		}
 	});

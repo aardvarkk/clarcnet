@@ -18,13 +18,12 @@ void network(server* sv) {
 		// std::cout << "got " << ps.size() << " packets" << std::endl;
 
 		for (auto const& p : ps) {
-			switch (p[_msg_type]) {
+			switch (p.mid) {
 				case ID_CONNECTION:
 				{
 					std::cout << "client " << p.fd << " connected from " << sv->address(p.fd) << std::endl;
 
-					packet r;
-					r[_msg_type] = ID_USER;
+					packet r(0, ID_USER);
 					r.push_back('w');
 					r.push_back('e');
 					r.push_back('l');
@@ -46,7 +45,7 @@ void network(server* sv) {
 				case ID_USER:
 				{
 					std::cout << "client " << p.fd << " sent user data of size " << p.size() << std::endl;
-					for (auto i = _msg_start; i < p.size(); ++i)
+					for (auto i = 1; i < p.size(); ++i)
 						std::cout << p[i];
 					std::cout << std::endl;
 				}

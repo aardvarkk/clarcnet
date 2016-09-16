@@ -31,10 +31,6 @@ namespace clarcnet {
 	 			std::to_string(__LINE__) + " " +\
 	 			std::string(strerror(errno)));
 
-//	#define thr \
-//		throw std::runtime_error(\
-//				std::string(strerror(errno)));
-
 	#define chk(val) \
 	{\
 		if (val < 0) {\
@@ -42,15 +38,7 @@ namespace clarcnet {
 		}\
 	}
 
-	typedef uint16_t                           arr_len;
-	typedef std::vector<uint8_t>               buffer;
-	typedef std::chrono::high_resolution_clock clk;
-	typedef uint8_t                            msg_id_t;
-	typedef std::chrono::milliseconds          ms;
-	typedef uint32_t                           packet_sz;
-	typedef std::chrono::time_point<clk>       tp;
-
-	enum msg_id : msg_id_t {
+	enum msg_id : uint8_t {
 		ID_UNKNOWN,
 		ID_CONNECTION,
 		ID_DISCONNECTION,
@@ -68,19 +56,82 @@ namespace clarcnet {
 		"ID_USER"
 	};
 
-	static const packet_sz _msg_type      = sizeof(packet_sz);
-	static const packet_sz _msg_start     = _msg_type + sizeof(msg_id_t);
-	static const packet_sz _max_arr_len   = std::numeric_limits<arr_len>::max();
-	static const packet_sz _max_packet_sz = std::numeric_limits<packet_sz>::max();
+	typedef std::vector<uint8_t>               buffer;
+	typedef std::chrono::high_resolution_clock clk;
+	typedef std::chrono::milliseconds          ms;
+	typedef std::chrono::time_point<clk>       tp;
 
-	struct packet : buffer {
-		packet() : packet(-1, ID_UNKNOWN) {}
-		packet(int fd, msg_id mid) : buffer(_msg_start, 0), fd(fd), rpos(_msg_start) { this->operator[](_msg_type) = mid; }
-		int fd;
+//	static size_t header_bytes_req(size_t payload_sz) {
+//		if      (payload_sz <= 0xFA      ) return 1;
+//		else if (payload_sz <= UINT8_MAX ) return 2;
+//		else if (payload_sz <= UINT16_MAX) return 3;
+//		else if (payload_sz <= UINT32_MAX) return 5;
+//		else if (payload_sz <= UINT64_MAX) return 9;
+//		else                               return 0;
+//	}
+
+	// returns total header size (INCLUDING intro byte) required based on the intro byte itself
+	static size_t header_bytes_req(uint8_t intro) {
+		if      (intro <= 0xFA) return 1; // payload <= 250 bytes
+		else if (intro == 0xFB) return 2; // payload <= UINT8_MAX
+		else if (intro == 0xFC) return 3; // payload <= UINT16_MAX
+		else if (intro == 0xFD) return 5; // payload <= UINT32_MAX
+		else if (intro == 0xFE) return 9; // payload <= UINT64_MAX
+		else if (intro == 0xFF) return 1; // heartbeat
+		else                    return 0; // invalid
+	}
+
+	struct streambuffer : buffer {
 		int rpos;
+		size_t recvd;
 
-		void reset() {
-			rpos = _msg_start;
+		streambuffer() : rpos(0) {}
+
+		size_t r_size_t() {
+			uint8_t intro = r_int8_t();
+			if (intro <= 0xFA) {
+				return intro;
+			}
+			else if (intro == 0xFB) {
+				return r_int8_t();
+			}
+			else if (intro == 0xFC) {
+				return r_int16_t();
+			}
+			else if (intro == 0xFD) {
+				return r_int32_t();
+			}
+			else if (intro == 0xFE) {
+				return r_int64_t();
+			}
+			else {
+				return 0;
+			}
+		}
+		
+		void w_size_t(size_t const& sz) {
+			if (sz <= 0xFA) {
+				w_int8_t(sz);
+			}
+			else if (sz <= UINT8_MAX) {
+				w_int8_t(0xFB);
+				w_int8_t(sz);
+			}
+			else if (sz <= UINT16_MAX) {
+				w_int8_t(0xFC);
+				w_int16_t(sz);
+			}
+			else if (sz <= UINT32_MAX) {
+				w_int8_t(0xFD);
+				w_int32_t(static_cast<int32_t>(sz));
+			}
+			else if (sz <= UINT64_MAX) {
+				w_int8_t(0xFE);
+				w_int64_t(sz);
+			}
+			else {
+				w_int8_t(0);
+			}
 		}
 		
 		int8_t r_int8_t() {
@@ -95,15 +146,13 @@ namespace clarcnet {
 
 		std::vector<uint8_t> r_vuint8_t() {
 			std::vector<uint8_t> vec;
-			arr_len sz = r_int16_t();
-			vec.resize(sz);
-			for (auto& v : vec)
-				v = r_int8_t();
+			vec.resize(r_size_t());
+			for (auto& v : vec) v = r_int8_t();
 			return vec;
 		}
 
 		void w_vuint8_t(std::vector<uint8_t> const& vec) {
-			w_int16_t(static_cast<arr_len>(vec.size()));
+			w_size_t(vec.size());
 			insert(end(), vec.begin(), vec.end());
 		}
 
@@ -141,17 +190,14 @@ namespace clarcnet {
 
 		std::vector<uint32_t> r_vuint32_t() {
 			std::vector<uint32_t> vec;
-			arr_len sz = r_int16_t();
-			vec.resize(sz);
-			for (auto& v : vec)
-				v = r_int32_t();
+			vec.resize(r_size_t());
+			for (auto& v : vec) v = r_int32_t();
 			return vec;
 		}
 
 		void w_vuint32_t(std::vector<uint32_t> const& vec) {
-			w_int16_t(static_cast<arr_len>(vec.size()));
-			for (auto const& v : vec)
-				w_int32_t(v);
+			w_size_t(vec.size());
+			for (auto const& v : vec) w_int32_t(v);
 		}
 
 		int64_t r_int64_t() {
@@ -176,22 +222,19 @@ namespace clarcnet {
 
 		std::vector<uint64_t> r_vuint64_t() {
 			std::vector<uint64_t> vec;
-			arr_len sz = r_int16_t();
-			vec.resize(sz);
-			for (auto& v : vec)
-				v = r_int64_t();
+			vec.resize(r_size_t());
+			for (auto& v : vec) v = r_int64_t();
 			return vec;
 		}
 
 		void w_vuint64_t(std::vector<uint64_t> const& vec) {
-			w_int16_t(static_cast<arr_len>(vec.size()));
-			for (auto const& v : vec)
-				w_int64_t(v);
+			w_size_t(vec.size());
+			for (auto const& v : vec) w_int64_t(v);
 		}
 
 		std::string r_string() {
 			std::string str;
-			arr_len sz = r_int16_t();
+			auto sz = r_size_t();
 			uint8_t* p = &this->operator[](rpos);
 			str = std::string(p, p + sz);
 			rpos += sz;
@@ -199,21 +242,31 @@ namespace clarcnet {
 		}
 
 		void w_string(std::string const& str) {
-			w_int16_t(static_cast<arr_len>(str.length()));
+			w_size_t(str.length());
 			insert(end(), str.begin(), str.end());
+		}
+	};
+	
+	struct packet : streambuffer {
+	
+		int          fd;
+		msg_id       mid;
+		streambuffer header;
+		
+		packet() : fd(-1), mid(ID_UNKNOWN) {}
+		packet(msg_id mid) : fd(-1), mid(mid) {}
+		packet(int fd, msg_id mid) : fd(fd), mid(mid) {}
+		
+		void set_header() {
+			header.clear();
+			header.rpos = 0;
+			header.w_size_t(size());
 		}
 	};
 
 	typedef std::vector<packet> packets;
 
-	struct packet_buffer {
-		packet_buffer() : buf(_msg_start, 0), len(0), tgt(0) {}
-		buffer    buf;
-		packet_sz len;
-		packet_sz tgt;
-	};
-
-	struct client_info : public packet_buffer {
+	struct client_info {
 	public:
 		client_info() :
 			last_packet_sent(clk::now()),
@@ -222,9 +275,10 @@ namespace clarcnet {
 			std::fill(addr_str, addr_str + sizeof addr_str, 0);
 		}
 
-		char addr_str[INET6_ADDRSTRLEN];
-		tp   last_packet_sent;
-		tp   last_packet_recv;
+		char         addr_str[INET6_ADDRSTRLEN];
+		streambuffer b;
+		tp           last_packet_sent;
+		tp           last_packet_recv;
 	};
 
 	typedef std::unordered_map<int, client_info> conn_map;
@@ -240,7 +294,8 @@ namespace clarcnet {
 		SUCCESS,
 		FAILURE,
 		DISCONNECTED,
-		BUFFERED
+		BUFFERED,
+		WAITING
 	};
 
 	class peer {
@@ -272,23 +327,35 @@ namespace clarcnet {
 		std::default_random_engine rng;
 		
 		ret_code send_sock(int fd, packet& p) {
-			if (p.empty() || p.size() > _max_packet_sz) return FAILURE;
+			if (p.empty()) return FAILURE;
 
-			*(packet_sz*)&p[0] = htonl(p.size());
-			ssize_t len = ::send(fd, &p[0], p.size(), 0);
+			p.set_header();
+			
+			ssize_t len;
 
-			if (len == p.size()) {
-				return SUCCESS;
+			// Header
+			len = ::send(fd, &p.header[0], p.header.size(), 0);
+			if (len == p.header.size() || errno == EAGAIN || errno == EWOULDBLOCK) {
+				// Message ID
+				len = ::send(fd, &p.mid, 1, 0);
+				if (len == 1 || errno == EAGAIN || errno == EWOULDBLOCK) {
+					// Payload
+					len = ::send(fd, &p[0], p.size(), 0);
+					if (len == p.size()) {
+						return SUCCESS;
+					} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+						return BUFFERED;
+					} else if (errno == ECONNRESET || errno == ETIMEDOUT || errno == EPIPE) {
+						return DISCONNECTED;
+					} else {
+						thr;
+					}
+				}
+			} else {
+				auto err = errno;
 			}
-			else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				return BUFFERED;
-			}
-			else if (errno == ECONNRESET || errno == ETIMEDOUT || errno == EPIPE) {
-				return DISCONNECTED;
-			}
-			else {
-				thr;
-			}
+			
+			return FAILURE;
 		}
 
 	protected:
@@ -335,71 +402,87 @@ namespace clarcnet {
 			}
 		}
 
-		ret_code receive(int fd, packet_buffer& pb, packets& ps) {
+		ret_code recv_into(int fd, streambuffer& b, ssize_t bytes) {
+			if (b.size() == b.recvd) b.resize(std::max(1ul, b.recvd * 2));
 
-			buffer& b = pb.buf;
+			ssize_t len = recv(fd, &*(b.begin() + b.recvd), b.size() - b.recvd, 0);
 
-			if (b.size() - pb.len == 0) {
-				b.resize(b.size() * 2);
-			}
+			// Mark the new size since we've received bytes
+			if (len > 0) b.recvd += len;
 
-			ssize_t len = recv(fd, &b[pb.len], b.size() - pb.len, 0);
-
-			if (len > 0) {
-
-				int off = 0;
-
-				while (len) {
-
-					if (!pb.tgt && (pb.len + len >= sizeof(pb.tgt))) {
-						pb.tgt = ntohl(*(packet_sz*)&b[off]);
-
-						if (pb.tgt > _max_packet_sz) {
-							return DISCONNECTED;
-						}
-
-						len    -= sizeof pb.tgt - pb.len;
-						pb.len  = sizeof pb.tgt;
-					}
-
-					if (!pb.tgt || (pb.len + len < pb.tgt)) {
-						pb.len += len;
-						if (off) {
-							std::copy(&b[off], &b[off+pb.len], &b[0]);
-						}
-
-						return SUCCESS;
-					}
-
-					packet p;
-					p.fd = fd;
-					p.clear();
-					p.insert(p.end(), b.begin() + off, b.begin() + off + pb.tgt);
-					ps.push_back(p);
-
-					len -= pb.tgt - pb.len;
-					assert(len >= 0);
-					off += pb.tgt;
-
-					pb.len = 0;
-					pb.tgt = 0;
-				}
-			}
-			else if (len == 0) {
-				return DISCONNECTED;
-			}
+			if (len == bytes) return SUCCESS;
+			else if (len == 0) return DISCONNECTED;
+			else if (len > 0) return WAITING;
 			else {
 				if (errno == ECONNRESET || errno == ETIMEDOUT) {
 					return DISCONNECTED;
 				}
 				else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-
+					return WAITING;
 				} else {
 					thr;
 				}
 			}
+		}
 
-			return SUCCESS;
+		void finish_bytes(streambuffer& b, size_t bytes) {
+			if (b.empty()) return;
+			b.erase(b.begin(), b.begin() + bytes);
+			b.recvd -= bytes;
+		}
+
+		ret_code receive(int fd, streambuffer& b, packets& ps) {
+
+			// Keep going while we are receiving packets!
+			for (;;) {
+
+				// Step 1 -- get the intro byte
+				if (b.empty()) {
+					auto code = recv_into(fd, b, 1);
+					if (code != SUCCESS) return code;
+				}
+
+				// Step 2 -- if the intro is a heartbeat, we're done!
+				if (b.front() == 0xFF) {
+					ps.push_back(packet(fd, ID_HEARTBEAT));
+					finish_bytes(b, 1);
+					continue;
+				}
+
+				// Step 3 -- get the rest of the header
+				auto header_sz_req = header_bytes_req(b.front());
+				if (b.recvd < header_sz_req) {
+					auto code = recv_into(fd, b, header_sz_req - b.recvd);
+					if (code != SUCCESS) return code;
+				}
+
+				// Step 4 -- get the message ID
+				auto header_and_mid_sz_req = header_sz_req + 1;
+				if (b.recvd < header_and_mid_sz_req) {
+					auto code = recv_into(fd, b, header_and_mid_sz_req - b.recvd);
+					if (code != SUCCESS) return code;
+				}
+
+				// Step 5 -- get the payload
+				b.rpos = 0;
+				auto payload_sz = b.r_size_t();
+				if (b.recvd < header_and_mid_sz_req + payload_sz) {
+					auto code = recv_into(fd, b, header_and_mid_sz_req + payload_sz - b.recvd);
+					if (code != SUCCESS) return code;
+				}
+
+				// We have a packet! Grab what we need and continue
+				msg_id mid = static_cast<msg_id>(b.r_int8_t());
+
+				packet p(fd, mid);
+				p.header.insert(p.header.begin(), b.begin(), b.begin() + header_sz_req);
+				p.insert(p.begin(), b.begin() + header_and_mid_sz_req, b.begin() + header_and_mid_sz_req + payload_sz);
+				ps.push_back(p);
+
+				// Finished up with this packet
+				// Push the data back to the start of the buffer so we can examine from the front
+				finish_bytes(b, header_and_mid_sz_req + payload_sz);
+			}
 		}
 	};
 
@@ -506,24 +589,23 @@ namespace clarcnet {
 				int cfd = fd_to_ci->first;
 				client_info& ci = fd_to_ci->second;
 
-				if (now - ci.last_packet_sent >= heartbeat_period) {
-					packet heartbeat = packet(cfd, ID_HEARTBEAT);
-					if (send(cfd, heartbeat) != SUCCESS) {
-						disconnect(cfd);
-						continue;
-					}
-					ci.last_packet_sent = now;
-				}
+//				if (now - ci.last_packet_sent >= heartbeat_period) {
+//					packet heartbeat = packet(cfd, ID_HEARTBEAT);
+//					if (send(cfd, heartbeat) != SUCCESS) {
+//						disconnect(cfd);
+//						continue;
+//					}
+//					ci.last_packet_sent = now;
+//				}
 
-				auto code = receive(cfd, ci, ret);
+				auto code = receive(cfd, ci.b, ret);
 				switch (code) {
 					case DISCONNECTED:
 					{
 						fd_to_ci = disconnect(fd_to_ci);
 						ret.push_back(packet(cfd, ID_DISCONNECTION));
-						continue;
 					}
-					break;
+					continue;
 
 					default:
 					break;
@@ -538,11 +620,11 @@ namespace clarcnet {
 					continue;
 				}
 
-				ret.erase(std::remove_if(
-					ret.begin(),
-					ret.end(),
-					[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
-					), ret.end());
+//				ret.erase(std::remove_if(
+//					ret.begin(),
+//					ret.end(),
+//					[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
+//					), ret.end());
 
 				++fd_to_ci;
 			}
@@ -676,7 +758,7 @@ namespace clarcnet {
 				return ret;
 			}
 
-			auto code = receive(fd, pb, ret);
+			auto code = receive(fd, b, ret);
 			switch (code) {
 				case DISCONNECTED:
 				{
@@ -692,36 +774,36 @@ namespace clarcnet {
 			if (!ret.empty())
 				last_packet_recv = clk::now();
 
-			for (auto const& p : ret) {
-				if (p[_msg_type] != ID_HEARTBEAT) continue;
-				packet heartbeat(fd, ID_HEARTBEAT);
-				auto code = peer::send(fd, heartbeat);
-				if (code != SUCCESS) {
-					ret.push_back(packet(fd, ID_DISCONNECTION));
-					disconnect();
-				}
-			}
+//			for (auto const& p : ret) {
+//				if (p[_msg_type] != ID_HEARTBEAT) continue;
+//				packet heartbeat(fd, ID_HEARTBEAT);
+//				auto code = peer::send(fd, heartbeat);
+//				if (code != SUCCESS) {
+//					ret.push_back(packet(fd, ID_DISCONNECTION));
+//					disconnect();
+//				}
+//			}
 
 			if (timeout != ms(0) && clk::now() - last_packet_recv > timeout) {
 				ret.push_back(packet(fd, ID_TIMEOUT));
 				disconnect();
 			}
 
-			ret.erase(std::remove_if(
-				ret.begin(),
-				ret.end(),
-				[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
-				), ret.end());
+//			ret.erase(std::remove_if(
+//				ret.begin(),
+//				ret.end(),
+//				[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
+//				), ret.end());
 
 			return ret;
 		}
 
 	protected:
-		tp            conn_start;
-		bool      		connected;
-		tp            last_packet_recv;
-		packet_buffer pb;
-		addrinfo* 		res;
-		ms            timeout;
+		tp           conn_start;
+		bool         connected;
+		tp           last_packet_recv;
+		streambuffer b;
+		addrinfo*    res;
+		ms           timeout;
 	};
 }

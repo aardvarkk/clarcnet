@@ -14,7 +14,7 @@ int main(int argc, char* argv[]) {
 
 		for (auto const& p : ps) {
 
-			switch (p[_msg_type]) {
+			switch (p.mid) {
 				case ID_CONNECTION:
 				{
 					std::cout << "connected" << std::endl;
@@ -61,7 +61,7 @@ int main(int argc, char* argv[]) {
 				case ID_USER:
 				{
 					std::cout << "server " << p.fd << " sent user data of size " << p.size() << std::endl;
-					for (auto i = _msg_start; i < p.size(); ++i)
+					for (auto i = 1; i < p.size(); ++i)
 						std::cout << p[i];
 					std::cout << std::endl;
 				}
