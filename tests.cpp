@@ -11,7 +11,7 @@ mutex   m;
 
 #define LOG_S lock_guard<mutex> lk(m);
 
-const int _max_packet = 50;
+const int _max_packet = 500;
 
 int main(int argc, char* argv[]) {
 	thread t_s([](){

@@ -294,7 +294,6 @@ namespace clarcnet {
 		SUCCESS,
 		FAILURE,
 		DISCONNECTED,
-		BUFFERED,
 		WAITING
 	};
 
@@ -320,42 +319,86 @@ namespace clarcnet {
 		ms lag_min, lag_max;
 		
 	protected:
-		std::deque<delayed_send> send_backlog;
+		
+	std::deque<delayed_send> send_backlog;
+
+	bool can_write() {
+		pollfd ufds;
+		ufds.fd = fd;
+		ufds.events = POLLOUT;
+		int err = poll(&ufds, 1, 0);
+		chk(err);
+
+		if (!(ufds.revents & POLLOUT)) {
+			return false;
+		}
+
+		int val;
+		socklen_t val_sz = sizeof val;
+		err = getsockopt(fd, SOL_SOCKET, SO_ERROR, &val, &val_sz);
+		chk(err);
+		if (val < 0) {
+			if (errno == EINPROGRESS) {
+				return false;
+			} else {
+				thr;
+			}
+		}
+
+		return true;
+	}
 
 	private:
 		
 		std::default_random_engine rng;
-		
-		ret_code send_sock(int fd, packet& p) {
-			if (p.empty()) return FAILURE;
 
-			p.set_header();
-			
-			ssize_t len;
+		ret_code send_sock(int fd, void const* data, size_t sz) {
+			size_t sent = 0;
 
-			// Header
-			len = ::send(fd, &p.header[0], p.header.size(), 0);
-			if (len == p.header.size() || errno == EAGAIN || errno == EWOULDBLOCK) {
-				// Message ID
-				len = ::send(fd, &p.mid, 1, 0);
-				if (len == 1 || errno == EAGAIN || errno == EWOULDBLOCK) {
-					// Payload
-					len = ::send(fd, &p[0], p.size(), 0);
-					if (len == p.size()) {
-						return SUCCESS;
-					} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-						return BUFFERED;
-					} else if (errno == ECONNRESET || errno == ETIMEDOUT || errno == EPIPE) {
+			while (sent < sz) {
+				if (!can_write()) continue; // busy wait until we can write
+				auto len = ::send(fd, data, sz, 0);
+				if (len == sz) return SUCCESS;
+				else if (len == 0) return DISCONNECTED;
+				else if (len < 0) {
+					if (errno == EAGAIN || errno == EWOULDBLOCK) {
+						sent += len;
+					}
+					else if (errno == ECONNRESET) {
 						return DISCONNECTED;
-					} else {
+					}
+					else {
 						thr;
 					}
 				}
-			} else {
-				auto err = errno;
 			}
-			
-			return FAILURE;
+		}
+
+		ret_code send_packet(int fd, packet &p) {
+
+			// Heartbeats are special messages (only one byte)
+			if (p.mid == ID_HEARTBEAT) {
+				uint8_t msg = 0xFF;
+				return send_sock(fd, &msg, 1);
+			}
+
+			// Only heartbeats can have empty payloads (and no message ID byte!)
+			if (p.empty()) return FAILURE;
+
+			// Set the header data for the packet
+			p.set_header();
+
+			// Header
+			auto code = send_sock(fd, &p.header.front(), p.header.size());
+			if (code != SUCCESS) return code;
+
+			// Message ID
+			code = send_sock(fd, &p.mid, sizeof(p.mid));
+			if (code != SUCCESS) return code;
+
+			// Payload
+			code = send_sock(fd, &p.front(), p.size());
+			return code;
 		}
 
 	protected:
@@ -374,7 +417,7 @@ namespace clarcnet {
 				if (send_backlog.front().earliest > now) break;
 				
 				delayed_send ds = send_backlog.front();
-				ret_code code = send_sock(ds.fd, ds.p);
+				ret_code code = send_packet(ds.fd, ds.p);
 				if (code != SUCCESS) break;
 				
 				send_backlog.pop_front();
@@ -383,7 +426,7 @@ namespace clarcnet {
 
 		ret_code send(int fd, packet& p) {
 			if (!lag_max.count()) {
-				return send_sock(fd, p);
+				return send_packet(fd, p);
 			} else {
 				
 				std::uniform_int_distribution<> dist_lag(
@@ -589,14 +632,14 @@ namespace clarcnet {
 				int cfd = fd_to_ci->first;
 				client_info& ci = fd_to_ci->second;
 
-//				if (now - ci.last_packet_sent >= heartbeat_period) {
-//					packet heartbeat = packet(cfd, ID_HEARTBEAT);
-//					if (send(cfd, heartbeat) != SUCCESS) {
-//						disconnect(cfd);
-//						continue;
-//					}
-//					ci.last_packet_sent = now;
-//				}
+				if (now - ci.last_packet_sent >= heartbeat_period) {
+					packet heartbeat = packet(cfd, ID_HEARTBEAT);
+					if (send(cfd, heartbeat) != SUCCESS) {
+						disconnect(cfd);
+						continue;
+					}
+					ci.last_packet_sent = now;
+				}
 
 				auto code = receive(cfd, ci.b, ret);
 				switch (code) {
@@ -727,27 +770,7 @@ namespace clarcnet {
 					}
 				}
 
-				pollfd ufds;
-				ufds.fd = fd;
-				ufds.events = POLLOUT;
-				int err = poll(&ufds, 1, 0);
-				chk(err);
-
-				if (!(ufds.revents & POLLOUT)) {
-					return ret;
-				}
-
-				int val;
-				socklen_t val_sz = sizeof val;
-				err = getsockopt(fd, SOL_SOCKET, SO_ERROR, &val, &val_sz);
-				chk(err);
-				if (val < 0) {
-					if (errno == EINPROGRESS) {
-						return ret;
-					} else {
-						thr;
-					}
-				}
+				if (!can_write()) return ret;
 
 				connected = true;
 
