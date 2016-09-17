@@ -11,7 +11,7 @@ mutex   m;
 
 #define LOG_S lock_guard<mutex> lk(m);
 
-const int _max_packet = 500;
+const size_t _max_packet = UINT16_MAX + UINT8_MAX;
 
 int main(int argc, char* argv[]) {
 	thread t_s([](){
@@ -20,6 +20,7 @@ int main(int argc, char* argv[]) {
 			auto ps = sv->process();
 
 			for (auto const& p : ps) {
+
 				switch (p.mid) {
 					case ID_CONNECTION:
 					{
@@ -43,6 +44,10 @@ int main(int argc, char* argv[]) {
 						}
 						cout << endl;
 					}
+					break;
+
+					default:
+						break;
 				}
 			}
 		}
@@ -53,10 +58,14 @@ int main(int argc, char* argv[]) {
 
 		bool connected = false;
 
+		default_random_engine rng;
+		rng.seed(5);
+
 		for (;;) {
 			auto ps = cl->process();
 
 			for (auto const& p : ps) {
+
 				switch (p.mid) {
 					case ID_CONNECTION:
 					{
@@ -73,18 +82,24 @@ int main(int argc, char* argv[]) {
 						connected = false;
 					}
 					break;
+
+					default:
+						break;
 				}
 			}
 
 			if (connected) {
-				size_t els = rand() % _max_packet;
+				size_t els = (rng() % _max_packet) + 60;
+				assert(els >= 60);
 				packet p(ID_USER);
 				p.resize(els);
 				for (auto i = 0; i < els; ++i) p[i] = '0' + i % 10;
 
-				LOG_S
-				cout << "sending " << p.size() << endl;
-				cl->send_to_server(p);
+				{
+					LOG_S
+					cout << "sending " << p.size() << endl;
+				}
+				cl->send(p);
 			}
 		}
 	});
