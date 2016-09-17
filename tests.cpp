@@ -84,9 +84,7 @@ int main(int argc, char* argv[]) {
 
 				LOG_S
 				cout << "sending " << p.size() << endl;
-				cl->send(p);
-
-				connected = !connected;
+				cl->send_to_server(p);
 			}
 		}
 	});

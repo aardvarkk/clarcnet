@@ -31,7 +31,7 @@ void network(server* sv) {
 					r.push_back('o');
 					r.push_back('m');
 					r.push_back('e');
-					auto sent = sv->send(p.fd, r);
+					auto sent = sv->send_to_client(p.fd, r);
 					assert(sent == r.size());
 				}
 				break;

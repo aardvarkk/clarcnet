@@ -27,7 +27,7 @@ int main(int argc, char* argv[]) {
 					p.push_back('5');
 					p.push_back('6');
 					p.push_back('7');
-					cl->send(p);
+					cl->send_to_server(p);
 
 					packet p2(0, ID_USER);
 					p2.push_back('h');
@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
 					p2.push_back('l');
 					p2.push_back('l');
 					p2.push_back('o');
-					auto sent = cl->send(p2);
+					auto sent = cl->send_to_server(p2);
 					assert(sent == p2.size());
 
 					// packet p3(0, ID_USER);

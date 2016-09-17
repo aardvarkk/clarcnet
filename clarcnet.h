@@ -29,7 +29,8 @@ namespace clarcnet {
 	 	throw std::runtime_error(\
 	 			std::string(__FILE__) + ":" +\
 	 			std::to_string(__LINE__) + " " +\
-	 			std::string(strerror(errno)));
+	 			std::string(strerror(errno)) + " (" +\
+				std::to_string(errno) + ")");
 
 	#define chk(val) \
 	{\
@@ -85,7 +86,7 @@ namespace clarcnet {
 		int rpos;
 		size_t recvd;
 
-		streambuffer() : rpos(0) {}
+		streambuffer() : rpos(0), recvd(0) {}
 
 		size_t r_size_t() {
 			uint8_t intro = r_int8_t();
@@ -93,16 +94,16 @@ namespace clarcnet {
 				return intro;
 			}
 			else if (intro == 0xFB) {
-				return r_int8_t();
+				return static_cast<uint8_t>(r_int8_t());
 			}
 			else if (intro == 0xFC) {
-				return r_int16_t();
+				return static_cast<uint16_t>(r_int16_t());
 			}
 			else if (intro == 0xFD) {
-				return r_int32_t();
+				return static_cast<uint32_t>(r_int32_t());
 			}
 			else if (intro == 0xFE) {
-				return r_int64_t();
+				return static_cast<uint64_t>(r_int64_t());
 			}
 			else {
 				return 0;
@@ -259,7 +260,6 @@ namespace clarcnet {
 		
 		void set_header() {
 			header.clear();
-			header.rpos = 0;
 			header.w_size_t(size());
 		}
 	};
@@ -319,7 +319,7 @@ namespace clarcnet {
 		ms lag_min, lag_max;
 		
 	protected:
-		
+
 	std::deque<delayed_send> send_backlog;
 
 	bool can_write() {
@@ -358,8 +358,12 @@ namespace clarcnet {
 			while (sent < sz) {
 				if (!can_write()) continue; // busy wait until we can write
 				auto len = ::send(fd, data, sz, 0);
-				if (len == sz) return SUCCESS;
-				else if (len == 0) return DISCONNECTED;
+				if (len == sz) {
+					return SUCCESS;
+				}
+				else if (len == 0) {
+					return DISCONNECTED;
+				}
 				else if (len < 0) {
 					if (errno == EAGAIN || errno == EWOULDBLOCK) {
 						sent += len;
@@ -445,17 +449,26 @@ namespace clarcnet {
 			}
 		}
 
-		ret_code recv_into(int fd, streambuffer& b, ssize_t bytes) {
-			if (b.size() == b.recvd) b.resize(std::max(1ul, b.recvd * 2));
+		ret_code recv_into(int fd, streambuffer& b, size_t bytes) {
 
-			ssize_t len = recv(fd, &*(b.begin() + b.recvd), b.size() - b.recvd, 0);
+			// Expand as we receive more data
+			if (b.size() < b.recvd + bytes) b.resize(b.recvd + bytes);
+
+			// Try to retrieve exactly the number required
+			ssize_t len = recv(fd, &*(b.begin() + b.recvd), bytes, 0);
 
 			// Mark the new size since we've received bytes
 			if (len > 0) b.recvd += len;
 
-			if (len == bytes) return SUCCESS;
-			else if (len == 0) return DISCONNECTED;
-			else if (len > 0) return WAITING;
+			if (len == bytes) {
+				return SUCCESS;
+			}
+			else if (len == 0) {
+				return DISCONNECTED;
+			}
+			else if (len > 0) {
+				return WAITING;
+			}
 			else {
 				if (errno == ECONNRESET || errno == ETIMEDOUT) {
 					return DISCONNECTED;
@@ -468,10 +481,14 @@ namespace clarcnet {
 			}
 		}
 
-		void finish_bytes(streambuffer& b, size_t bytes) {
-			if (b.empty()) return;
+		void finish_packet(streambuffer &b, size_t bytes) {
+			assert(!b.empty());
+			assert(bytes);
+			assert(b.size() >= bytes);
+			assert(b.recvd >= bytes);
 			b.erase(b.begin(), b.begin() + bytes);
 			b.recvd -= bytes;
+			assert(b.size() >= b.recvd);
 		}
 
 		ret_code receive(int fd, streambuffer& b, packets& ps) {
@@ -482,13 +499,15 @@ namespace clarcnet {
 				// Step 1 -- get the intro byte
 				if (b.empty()) {
 					auto code = recv_into(fd, b, 1);
-					if (code != SUCCESS) return code;
+					if (code != SUCCESS) {
+						return code;
+					}
 				}
 
 				// Step 2 -- if the intro is a heartbeat, we're done!
 				if (b.front() == 0xFF) {
 					ps.push_back(packet(fd, ID_HEARTBEAT));
-					finish_bytes(b, 1);
+					finish_packet(b, 1);
 					continue;
 				}
 
@@ -496,35 +515,52 @@ namespace clarcnet {
 				auto header_sz_req = header_bytes_req(b.front());
 				if (b.recvd < header_sz_req) {
 					auto code = recv_into(fd, b, header_sz_req - b.recvd);
-					if (code != SUCCESS) return code;
+					if (code != SUCCESS) {
+						return code;
+					}
 				}
 
 				// Step 4 -- get the message ID
 				auto header_and_mid_sz_req = header_sz_req + 1;
 				if (b.recvd < header_and_mid_sz_req) {
 					auto code = recv_into(fd, b, header_and_mid_sz_req - b.recvd);
-					if (code != SUCCESS) return code;
+					if (code != SUCCESS) {
+						return code;
+					}
 				}
 
 				// Step 5 -- get the payload
 				b.rpos = 0;
 				auto payload_sz = b.r_size_t();
+
+				assert(payload_sz <= 500);
+
 				if (b.recvd < header_and_mid_sz_req + payload_sz) {
 					auto code = recv_into(fd, b, header_and_mid_sz_req + payload_sz - b.recvd);
-					if (code != SUCCESS) return code;
+					if (code != SUCCESS) {
+						return code;
+					}
 				}
 
 				// We have a packet! Grab what we need and continue
 				msg_id mid = static_cast<msg_id>(b.r_int8_t());
 
 				packet p(fd, mid);
+
+				assert(b.recvd >= header_and_mid_sz_req + payload_sz);
+				assert(b.size() >= header_and_mid_sz_req + payload_sz);
+
 				p.header.insert(p.header.begin(), b.begin(), b.begin() + header_sz_req);
 				p.insert(p.begin(), b.begin() + header_and_mid_sz_req, b.begin() + header_and_mid_sz_req + payload_sz);
+
+				assert(p.header.size() == header_sz_req);
+				assert(p.size() == payload_sz);
+
 				ps.push_back(p);
 
 				// Finished up with this packet
 				// Push the data back to the start of the buffer so we can examine from the front
-				finish_bytes(b, header_and_mid_sz_req + payload_sz);
+				finish_packet(b, header_and_mid_sz_req + payload_sz);
 			}
 		}
 	};
@@ -583,7 +619,7 @@ namespace clarcnet {
 			freeaddrinfo(res);
 		}
 
-		ret_code send(int fd, packet& p) {
+		ret_code send_to_client(int fd, packet &p) {
 			if (!conns.count(fd)) return FAILURE;
 			return peer::send(fd, p);
 		}
@@ -632,14 +668,14 @@ namespace clarcnet {
 				int cfd = fd_to_ci->first;
 				client_info& ci = fd_to_ci->second;
 
-				if (now - ci.last_packet_sent >= heartbeat_period) {
-					packet heartbeat = packet(cfd, ID_HEARTBEAT);
-					if (send(cfd, heartbeat) != SUCCESS) {
-						disconnect(cfd);
-						continue;
-					}
-					ci.last_packet_sent = now;
-				}
+//				if (now - ci.last_packet_sent >= heartbeat_period) {
+//					packet heartbeat = packet(cfd, ID_HEARTBEAT);
+//					if (send(cfd, heartbeat) != SUCCESS) {
+//						disconnect(cfd);
+//						continue;
+//					}
+//					ci.last_packet_sent = now;
+//				}
 
 				auto code = receive(cfd, ci.b, ret);
 				switch (code) {
@@ -663,11 +699,11 @@ namespace clarcnet {
 					continue;
 				}
 
-//				ret.erase(std::remove_if(
-//					ret.begin(),
-//					ret.end(),
-//					[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
-//					), ret.end());
+				ret.erase(std::remove_if(
+					ret.begin(),
+					ret.end(),
+					[](packet const& p) { return p.mid == ID_HEARTBEAT; }
+					), ret.end());
 
 				++fd_to_ci;
 			}
@@ -747,7 +783,7 @@ namespace clarcnet {
 			connected = false;
 		}
 
-		ssize_t send(packet& p) {
+		ret_code send_to_server(packet &p) {
 			return peer::send(this->fd, p);
 		}
 
@@ -797,26 +833,28 @@ namespace clarcnet {
 			if (!ret.empty())
 				last_packet_recv = clk::now();
 
-//			for (auto const& p : ret) {
-//				if (p[_msg_type] != ID_HEARTBEAT) continue;
-//				packet heartbeat(fd, ID_HEARTBEAT);
-//				auto code = peer::send(fd, heartbeat);
-//				if (code != SUCCESS) {
-//					ret.push_back(packet(fd, ID_DISCONNECTION));
-//					disconnect();
-//				}
-//			}
+			for (auto const& p : ret) {
+				if (p.mid != ID_HEARTBEAT) continue;
+
+				// Respond with copied heartbeat packet
+				packet resp(p);
+				if (send_to_server(resp) != SUCCESS) {
+					ret.push_back(packet(fd, ID_DISCONNECTION));
+					disconnect();
+					return ret;
+				}
+			}
 
 			if (timeout != ms(0) && clk::now() - last_packet_recv > timeout) {
 				ret.push_back(packet(fd, ID_TIMEOUT));
 				disconnect();
 			}
 
-//			ret.erase(std::remove_if(
-//				ret.begin(),
-//				ret.end(),
-//				[](packet const& p) { return p[_msg_type] == ID_HEARTBEAT; }
-//				), ret.end());
+			ret.erase(std::remove_if(
+				ret.begin(),
+				ret.end(),
+				[](packet const& p) { return p.mid == ID_HEARTBEAT; }
+				), ret.end());
 
 			return ret;
 		}
