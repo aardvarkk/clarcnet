@@ -104,7 +104,7 @@ namespace clarcnet {
 
 	struct streambuffer : buffer {
 		int rpos;
-		size_t recvd;
+		size_t recvd; // can't use size() to determine what we've received -- need to know how much VALID info there is
 
 		streambuffer() : rpos(0), recvd(0) {}
 
@@ -128,7 +128,7 @@ namespace clarcnet {
 
 			throw std::runtime_error("Invalid size!");
 		}
-		
+
 		void w_size_t(size_t const& sz) {
 			if (sz <= 0xFA) {
 				w_int8_t(sz);
@@ -152,7 +152,7 @@ namespace clarcnet {
 				throw std::runtime_error("Invalid size!");
 			}
 		}
-		
+
 		int8_t r_int8_t() {
 			int8_t v = this->operator[](rpos);
 			rpos += sizeof v;
@@ -265,17 +265,21 @@ namespace clarcnet {
 			insert(end(), str.begin(), str.end());
 		}
 	};
-	
+
 	struct packet : streambuffer {
-	
+
 		int          fd;
 		msg_id       mid;
 		streambuffer header;
 		
-		packet() : fd(-1), mid(ID_UNKNOWN) {}
-		packet(msg_id mid) : fd(-1), mid(mid) {}
-		packet(int fd, msg_id mid) : fd(fd), mid(mid) {}
-		
+		packet() : packet(-1, ID_UNKNOWN) {}
+		packet(msg_id mid) : packet(-1, mid) {}
+		packet(int fd, msg_id mid) : fd(fd), mid(mid) {
+			header.reserve(9); // largest a header can be
+			reserve(0xFF); // reasonable size to start for a payload
+		}
+
+		// Used when sending a packet to set the header correctly
 		void set_header() {
 			header.clear();
 			header.w_size_t(size());
@@ -293,10 +297,10 @@ namespace clarcnet {
 			std::fill(addr_str, addr_str + sizeof addr_str, 0);
 		}
 
-		char         addr_str[INET6_ADDRSTRLEN];
-		streambuffer b;
-		tp           last_packet_sent;
-		tp           last_packet_recv;
+		char   addr_str[INET6_ADDRSTRLEN];
+		packet w; // working packet we're constructing
+		tp     last_packet_sent;
+		tp     last_packet_recv;
 	};
 
 	typedef std::unordered_map<int, client_info> conn_map;
@@ -495,16 +499,15 @@ namespace clarcnet {
 			}
 		}
 
-		ret_code recv_into(int fd, streambuffer& b, size_t bytes) {
-
-			// Expand as we receive more data
-			if (b.size() < b.recvd + bytes) b.resize(b.recvd + bytes);
+		ret_code recv_into(int fd, void* buffer, size_t bytes, size_t& recvd) {
+			// Don't assume we got anything
+			recvd = 0;
 
 			// Try to retrieve exactly the number required
-			ssize_t len = recv(fd, &*(b.begin() + b.recvd), bytes, 0);
+			ssize_t len = recv(fd, buffer, bytes, 0);
 
 			// Mark the new size since we've received bytes
-			if (len > 0) b.recvd += len;
+			if (len > 0) recvd = len;
 
 			if (len == bytes) {
 				return SUCCESS;
@@ -527,108 +530,85 @@ namespace clarcnet {
 			}
 		}
 
-		void finish_packet(streambuffer &b, size_t bytes) {
-			assert(!b.empty());
-			assert(bytes);
-			assert(b.size() >= bytes);
-			assert(b.recvd >= bytes);
-			b.erase(b.begin(), b.begin() + bytes);
-			b.recvd -= bytes;
-			assert(b.size() >= b.recvd);
+		ret_code recv_into(int fd, streambuffer& b, size_t bytes) {
+			// Expand as we receive more data
+			if (b.size() < b.recvd + bytes) b.resize(b.recvd + bytes);
+
+			// Try to retrieve exactly the number required
+			size_t recvd;
+			auto code = recv_into(fd, &*(b.begin() + b.recvd), bytes, recvd);
+
+			// Mark the new size since we've received bytes
+			if (recvd > 0) b.recvd += recvd;
+
+			return code;
 		}
 
-		ret_code receive(int fd, streambuffer& b, packets& ps) {
+		void finish_packet(packet& w, packets& ps) {
+			ps.emplace_back(std::move(w));
+			w = packet();
+		}
 
-			int i = 0;
+		ret_code receive(int fd, packet &w, packets &ps) {
 
 			// Keep going while we are receiving packets!
 			for (;;) {
 
-				++i;
-
-				ret_code test = DISCONNECTED;
-
 				// Step 1 -- get the intro byte
-				if (!b.recvd) {
-					auto code = recv_into(fd, b, 1);
-					test = code;
-					if (code != SUCCESS) {
-						return code;
-					}
+				if (!w.header.recvd) {
+					auto code = recv_into(fd, w.header, 1);
+					if (code != SUCCESS) return code;
 				}
 
-				assert(b.front() != 0);
-				assert(b.front() >= 60);
-
 				// Step 2 -- if the intro is a heartbeat, we're done!
-				if (b.front() == 0xFF) {
-					ps.push_back(packet(fd, ID_HEARTBEAT));
-					finish_packet(b, 1);
+				if (w.header.front() == 0xFF) {
+					w.mid = ID_HEARTBEAT;
+					finish_packet(w, ps);
 					continue;
 				}
 
 				// Step 3 -- get the rest of the header
-				auto header_sz_req = header_bytes_req(b.front());
-				if (b.recvd < header_sz_req) {
-					auto code = recv_into(fd, b, header_sz_req - b.recvd);
-					if (code != SUCCESS) {
-						assert(b.front() != 0);
-						assert(b.front() >= 60);
-						return code;
-					}
+				auto header_sz_req = header_bytes_req(w.header.front());
+				if (w.header.recvd < header_sz_req) {
+					auto code = recv_into(fd, w.header, header_sz_req - w.header.recvd);
+					if (code != SUCCESS) return code;
 				}
 
 				// Step 4 -- get the message ID
-				auto header_and_mid_sz_req = header_sz_req + 1;
-				if (b.recvd < header_and_mid_sz_req) {
-					auto code = recv_into(fd, b, header_and_mid_sz_req - b.recvd);
+				// Sending ID_UNKNOWN is unsupported as we will not take it as valid input
+				if (w.mid == ID_UNKNOWN) {
+					size_t recvd;
+					auto code = recv_into(fd, &w.mid, 1, recvd);
 					if (code != SUCCESS) {
-						assert(b.front() != 0);
 						return code;
 					}
 				}
 
 				// Step 5 -- get the payload
-				b.rpos = 0;
-				auto payload_sz = b.r_size_t();
+				w.header.rpos = 0;
+				auto payload_sz = w.header.r_size_t();
 
 				assert(payload_sz > 60);
 
-				if (b.recvd < header_and_mid_sz_req + payload_sz) {
-					auto code = recv_into(fd, b, header_and_mid_sz_req + payload_sz - b.recvd);
+				if (w.recvd < payload_sz) {
+					auto code = recv_into(fd, w, payload_sz - w.recvd);
 					if (code != SUCCESS) {
-						assert(b.front() != 0);
+						assert(w.front() != 0);
 						return code;
 					}
 				}
 
-				// We have a packet! Grab what we need and continue
-				b.rpos = 0;
-				payload_sz = b.r_size_t();
-				msg_id mid = static_cast<msg_id>(b.r_int8_t());
+				// Finished a packet. Set the message ID and we're done.
+				assert(w.size() >= payload_sz);
+				assert(w.recvd == payload_sz);
 
-				packet p(fd, mid);
+				assert(w.header.size() == header_sz_req);
+				assert(w.size() == payload_sz);
 
-				assert(b.recvd >= header_and_mid_sz_req + payload_sz);
-				assert(b.size() >= header_and_mid_sz_req + payload_sz);
+				w.header.rpos = 0;
+				assert(w.size() == w.header.r_size_t());
 
-				p.header.insert(p.header.begin(), b.begin(), b.begin() + header_sz_req);
-				p.insert(p.begin(), b.begin() + header_and_mid_sz_req, b.begin() + header_and_mid_sz_req + payload_sz);
-
-				assert(p.header.size() == header_sz_req);
-				assert(p.size() == payload_sz);
-
-				p.header.rpos = 0;
-				assert(p.size() == p.header.r_size_t());
-
-				ps.push_back(p);
-
-				// Finished up with this packet
-				// Push the data back to the start of the buffer so we can examine from the front
-				finish_packet(b, header_and_mid_sz_req + payload_sz);
-
-				assert(b.front() != 0);
-				assert(b.front() >= 60);
+				finish_packet(w, ps);
 			}
 		}
 	};
@@ -745,7 +725,7 @@ namespace clarcnet {
 //					ci.last_packet_sent = now;
 //				}
 
-				auto code = receive(cfd, ci.b, ret);
+				auto code = receive(cfd, ci.w, ret);
 				switch (code) {
 					case DISCONNECTED:
 					{
@@ -885,7 +865,7 @@ namespace clarcnet {
 				return ret;
 			}
 
-			auto code = receive(fd, b, ret);
+			auto code = receive(fd, w, ret);
 			switch (code) {
 				case DISCONNECTED:
 				{
@@ -928,11 +908,11 @@ namespace clarcnet {
 		}
 
 	protected:
-		tp           conn_start;
-		bool         connected;
-		tp           last_packet_recv;
-		streambuffer b;
-		addrinfo*    res;
-		ms           timeout;
+		tp        conn_start;
+		bool      connected;
+		tp        last_packet_recv;
+		packet    w; // working packet we're constructing
+		addrinfo* res;
+		ms        timeout;
 	};
 }
