@@ -245,7 +245,7 @@ namespace clarcnet {
 	struct packet : streambuffer {
 
 		int          fd;
-		msg_id       mid;
+		uint8_t      mid;
 		streambuffer header;
 
 		packet() : packet(-1, ID_UNKNOWN) {}
