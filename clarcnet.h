@@ -290,9 +290,6 @@ namespace clarcnet {
 
 	protected:
 
-		// Packets that we intentionally want to send late
-		std::deque<delayed_send> delayed;
-
 		// Don't pass along heartbeats -- they're internal
 		void remove_heartbeats(packets& ps)
 		{
@@ -333,10 +330,6 @@ namespace clarcnet {
 
 			return true;
 		}
-
-	private:
-
-		std::default_random_engine rng;
 
 		ret_code send_sock(int fd, void const* data, size_t sz) {
 			assert(sz);
@@ -576,26 +569,12 @@ namespace clarcnet {
 				finish_packet(w, ps);
 			}
 		}
+
+		std::deque<delayed_send> delayed; // packets that we intentionally want to send late
+		std::default_random_engine rng; // used to generate lag values
 	};
 
 	class server : public peer {
-
-		struct client_info {
-		public:
-			client_info() :
-				last_packet_sent(clk::now()),
-				last_packet_recv(clk::now())
-			{
-				std::fill(addr_str, addr_str + sizeof addr_str, 0);
-			}
-
-			char   addr_str[INET6_ADDRSTRLEN];
-			packet w; // working packet we're constructing
-			tp     last_packet_sent;
-			tp     last_packet_recv;
-		};
-
-		typedef std::unordered_map<int, client_info> conn_map;
 
 	public:
 		server(uint16_t port, ms heartbeat_period = ms(4000), ms timeout = ms(15000)) {
@@ -613,7 +592,6 @@ namespace clarcnet {
 
 			fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 			chk(fd);
-			inet_ntop(res->ai_family, in_addr(res->ai_addr), addr_str, sizeof addr_str);
 			err = fcntl(fd, F_SETFL, O_NONBLOCK);
 			chk(err);
 			socklen_t val;
@@ -727,8 +705,6 @@ namespace clarcnet {
 			return fd_to_ci == conns.end() ? "" : fd_to_ci->second.addr_str;
 		}
 
-		char addr_str[INET6_ADDRSTRLEN];
-
 		void disconnect(int cfd) {
 			auto it = conns.find(cfd);
 
@@ -738,9 +714,22 @@ namespace clarcnet {
 		}
 
 	protected:
-		conn_map conns;
-		ms       heartbeat_period;
-		ms       timeout;
+
+		struct client_info {
+			client_info() :
+				last_packet_sent(clk::now()),
+				last_packet_recv(clk::now())
+			{
+				std::fill(addr_str, addr_str + sizeof addr_str, 0);
+			}
+
+			char   addr_str[INET6_ADDRSTRLEN];
+			packet w; // working packet we're constructing
+			tp     last_packet_sent;
+			tp     last_packet_recv;
+		};
+
+		typedef std::unordered_map<int, client_info> conn_map;
 
 		conn_map::iterator disconnect(conn_map::iterator conn_it) {
 			int cfd = conn_it->first;
@@ -751,6 +740,10 @@ namespace clarcnet {
 			close(conn_it->first);
 			return conns.erase(conn_it);
 		}
+
+		conn_map conns;
+		ms       heartbeat_period;
+		ms       timeout;
 	};
 
 	class client : public peer {
