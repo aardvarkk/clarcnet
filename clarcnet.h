@@ -350,7 +350,7 @@ namespace clarcnet {
 					if (errno == EAGAIN || errno == EWOULDBLOCK) {
 						poll_write();
 					}
-					else if (errno == ECONNRESET) {
+					else if (errno == ECONNRESET || errno == EPIPE) {
 						return DISCONNECTED;
 					}
 					else {
