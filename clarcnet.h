@@ -485,7 +485,9 @@ namespace clarcnet {
 			return code;
 		}
 
-		void finish_packet(packet& w, packets& ps) {
+		void finish_packet(int fd, packet &w, packets &ps) {
+			assert(fd > 0);
+			w.fd = fd;
 			ps.emplace_back(std::move(w));
 			w = packet();
 		}
@@ -534,7 +536,7 @@ namespace clarcnet {
 				// Step 2 -- if the intro is a heartbeat, we're done!
 				if (w.header.front() == 0xFF) {
 					w.mid = ID_HEARTBEAT;
-					finish_packet(w, ps);
+					finish_packet(fd, w, ps);
 					continue;
 				}
 
@@ -566,7 +568,7 @@ namespace clarcnet {
 					if (code != SUCCESS) return code;
 				}
 
-				finish_packet(w, ps);
+				finish_packet(fd, w, ps);
 			}
 		}
 
