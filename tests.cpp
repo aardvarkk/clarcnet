@@ -11,7 +11,7 @@ mutex   m;
 
 #define LOG_S lock_guard<mutex> lk(m);
 
-const size_t _max_packet = UINT16_MAX + UINT8_MAX;
+const size_t _max_packet = UINT8_MAX + UINT16_MAX;
 
 int main(int argc, char* argv[]) {
 	thread t_s([](){
@@ -20,34 +20,14 @@ int main(int argc, char* argv[]) {
 			auto ps = sv->process();
 
 			for (auto const& p : ps) {
+				LOG_S;
+				cout << "Server received " << msg_strs[p.mid] << endl;
 
-				switch (p.mid) {
-					case ID_CONNECTION:
-					{
-						LOG_S;
-						cout << "connection from client" << endl;
+				if (p.mid == ID_USER) {
+					for (auto i = 0; i < p.size(); ++i) {
+						cout << p[i];
 					}
-					break;
-
-					case ID_DISCONNECTION:
-					{
-						LOG_S;
-						cout << "disconnection from client" << endl;
-					}
-					break;
-
-					case ID_USER:
-					{
-						LOG_S;
-						for (auto i = 0; i < p.size(); ++i) {
-							cout << p[i];
-						}
-						cout << endl;
-					}
-					break;
-
-					default:
-						break;
+					cout << endl;
 				}
 			}
 		}
@@ -65,41 +45,17 @@ int main(int argc, char* argv[]) {
 			auto ps = cl->process();
 
 			for (auto const& p : ps) {
+				LOG_S;
+				cout << "Client received " << clarcnet::msg_strs[p.mid] << endl;
 
-				switch (p.mid) {
-					case ID_CONNECTION:
-					{
-						LOG_S;
-						cout << "connected to server" << endl;
-						connected = true;
-					}
-					break;
-
-					case ID_DISCONNECTION:
-					{
-						LOG_S;
-						cout << "disconnected from server" << endl;
-						connected = false;
-					}
-					break;
-
-					default:
-						break;
-				}
+				if (p.mid == ID_CONNECTION) connected = true;
 			}
 
 			if (connected) {
-				size_t els = (rng() % _max_packet) + 60;
-				assert(els >= 60);
-
 				packet p(ID_USER);
+				size_t els = rng() % _max_packet;
 				p.resize(els);
 				for (auto i = 0; i < els; ++i) p[i] = '0' + i % 10;
-
-				{
-					LOG_S
-					cout << "sending " << p.size() << endl;
-				}
 				cl->send(std::move(p));
 			}
 		}

@@ -48,7 +48,7 @@ namespace clarcnet {
 		ID_USER
 	};
 
-	static const char* _msg_strs[] = {
+	static const char* msg_strs[] = {
 		"ID_UNKNOWN",
 		"ID_CONNECTION",
 		"ID_DISCONNECTION",
@@ -61,15 +61,6 @@ namespace clarcnet {
 	typedef std::chrono::high_resolution_clock clk;
 	typedef std::chrono::milliseconds          ms;
 	typedef std::chrono::time_point<clk>       tp;
-
-//	static size_t header_bytes_req(size_t payload_sz) {
-//		if      (payload_sz <= 0xFA      ) return 1;
-//		else if (payload_sz <= UINT8_MAX ) return 2;
-//		else if (payload_sz <= UINT16_MAX) return 3;
-//		else if (payload_sz <= UINT32_MAX) return 5;
-//		else if (payload_sz <= UINT64_MAX) return 9;
-//		else                               return 0;
-//	}
 
 	// returns total header size (INCLUDING intro byte) required based on the intro byte itself
 	static size_t header_bytes_req(uint8_t intro) {
@@ -274,10 +265,7 @@ namespace clarcnet {
 		
 		packet() : packet(-1, ID_UNKNOWN) {}
 		packet(msg_id mid) : packet(-1, mid) {}
-		packet(int fd, msg_id mid) : fd(fd), mid(mid) {
-			header.reserve(9); // largest a header can be
-			reserve(0xFF); // reasonable size to start for a payload
-		}
+		packet(int fd, msg_id mid) : fd(fd), mid(mid) {}
 
 		// Used when sending a packet to set the header correctly
 		void set_header() {
@@ -322,6 +310,7 @@ namespace clarcnet {
 	};
 
 	class peer {
+
 	public:
 
 		peer() : fd(-1), lag_min(ms(0)), lag_max(ms(0)) {
@@ -344,19 +333,21 @@ namespace clarcnet {
 		
 	protected:
 
-	std::deque<delayed_send> send_backlog;
+		// Packets that we intentionally want to send late
+		std::deque<delayed_send> delayed;
 
-	// Blocking wait to write
-//	void wait_write() {
-//		fd_set writable;
-//		FD_ZERO(&writable);
-//		FD_SET(fd, &writable);
-//
-//		int err = select(1, nullptr, &writable, nullptr, nullptr);
-//		assert(err == 1);
-//	}
+		// Don't pass along heartbeats -- they're internal
+		void remove_heartbeats(packets& ps)
+		{
+			// Don't pass along heartbeats -- they're internal
+			ps.erase(std::remove_if(
+				ps.begin(),
+				ps.end(),
+				[](packet const& p) { return p.mid == ID_HEARTBEAT; }
+				), ps.end());
+		}
 
-	// Non-blocking check if writing is possible
+		// Non-blocking check if writing is possible
 	bool poll_write() {
 		pollfd ufds = { 0 };
 		ufds.fd = fd;
@@ -389,9 +380,9 @@ namespace clarcnet {
 		std::default_random_engine rng;
 
 		ret_code send_sock(int fd, void const* data, size_t sz) {
-			size_t sent = 0;
-
 			assert(sz);
+
+			size_t sent = 0;
 
 			while (sent < sz) {
 				auto len = ::send(fd, data, sz - sent, 0);
@@ -435,9 +426,6 @@ namespace clarcnet {
 			// Set the header data for the packet
 			p.set_header();
 
-			p.header.rpos = 0;
-			assert(p.size() == p.header.r_size_t());
-
 			// Header
 			auto code = send_sock(fd, &p.header.front(), p.header.size());
 			if (code != SUCCESS) {
@@ -467,16 +455,16 @@ namespace clarcnet {
 
 		void flush_backlog() {
 			auto now = clk::now();
-			while (!send_backlog.empty()) {
-				if (send_backlog.front().earliest > now) break;
+			while (!delayed.empty()) {
+				if (delayed.front().earliest > now) break;
 				
-				delayed_send ds = send_backlog.front();
+				delayed_send ds = delayed.front();
 				ret_code code = send_packet(ds.fd, ds.p);
 				if (code != SUCCESS) {
 					break;
 				}
 				
-				send_backlog.pop_front();
+				delayed.pop_front();
 			}
 		}
 
@@ -491,7 +479,7 @@ namespace clarcnet {
 				);
 				ms lag(dist_lag(rng));
 				
-				send_backlog.emplace_back(delayed_send(fd, std::move(p), clk::now() + lag));
+				delayed.emplace_back(delayed_send(fd, std::move(p), clk::now() + lag));
 				
 				return SUCCESS;
 			}
@@ -577,34 +565,17 @@ namespace clarcnet {
 				if (w.mid == ID_UNKNOWN) {
 					size_t recvd;
 					auto code = recv_into(fd, &w.mid, 1, recvd);
-					if (code != SUCCESS) {
-						return code;
-					}
+					if (code != SUCCESS) return code;
 				}
 
 				// Step 5 -- get the payload
 				w.header.rpos = 0;
 				auto payload_sz = w.header.r_size_t();
 
-				assert(payload_sz > 60);
-
 				if (w.recvd < payload_sz) {
 					auto code = recv_into(fd, w, payload_sz - w.recvd);
-					if (code != SUCCESS) {
-						assert(w.front() != 0);
-						return code;
-					}
+					if (code != SUCCESS) return code;
 				}
-
-				// Finished a packet. Set the message ID and we're done.
-				assert(w.size() >= payload_sz);
-				assert(w.recvd == payload_sz);
-
-				assert(w.header.size() == header_sz_req);
-				assert(w.size() == payload_sz);
-
-				w.header.rpos = 0;
-				assert(w.size() == w.header.r_size_t());
 
 				finish_packet(w, ps);
 			}
@@ -714,14 +685,13 @@ namespace clarcnet {
 				int cfd = fd_to_ci->first;
 				client_info& ci = fd_to_ci->second;
 
-//				if (now - ci.last_packet_sent >= heartbeat_period) {
-//					packet heartbeat = packet(cfd, ID_HEARTBEAT);
-//					if (send(cfd, heartbeat) != SUCCESS) {
-//						disconnect(cfd);
-//						continue;
-//					}
-//					ci.last_packet_sent = now;
-//				}
+				if (now - ci.last_packet_sent >= heartbeat_period) {
+					if (send(cfd, packet(cfd, ID_HEARTBEAT)) != SUCCESS) {
+						disconnect(cfd);
+						continue;
+					}
+					ci.last_packet_sent = now;
+				}
 
 				auto code = receive(cfd, ci.w, ret);
 				switch (code) {
@@ -745,14 +715,10 @@ namespace clarcnet {
 					continue;
 				}
 
-				ret.erase(std::remove_if(
-					ret.begin(),
-					ret.end(),
-					[](packet const& p) { return p.mid == ID_HEARTBEAT; }
-					), ret.end());
-
 				++fd_to_ci;
 			}
+
+			remove_heartbeats(ret);
 
 			return ret;
 		}
@@ -774,10 +740,10 @@ namespace clarcnet {
 
 		conn_map::iterator disconnect(conn_map::iterator conn_it) {
 			int cfd = conn_it->first;
-			send_backlog.erase(remove_if(send_backlog.begin(), send_backlog.end(),
+			delayed.erase(remove_if(delayed.begin(), delayed.end(),
 				[=](delayed_send const& ds) {
 					return ds.fd == cfd;
-				}), send_backlog.end());
+				}), delayed.end());
 			close(conn_it->first);
 			return conns.erase(conn_it);
 		}
@@ -895,11 +861,7 @@ namespace clarcnet {
 				disconnect();
 			}
 
-			ret.erase(std::remove_if(
-				ret.begin(),
-				ret.end(),
-				[](packet const& p) { return p.mid == ID_HEARTBEAT; }
-				), ret.end());
+			remove_heartbeats(ret);
 
 			return ret;
 		}
