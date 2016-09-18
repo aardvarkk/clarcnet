@@ -632,26 +632,26 @@ namespace clarcnet {
 
 			if (accept_new) {
 				for (;;) {
-					int client_fd = accept(fd, (sockaddr*)&client, &sz);
+					int cfd = accept(fd, (sockaddr*)&client, &sz);
 
-					if (client_fd < 0) {
+					if (cfd < 0) {
 						if (errno == EAGAIN || errno == EWOULDBLOCK) {
 							break;
 						} else {
 							thr;
 						}
 					} else {
-						assert(!conns.count(client_fd));
-						conns.insert(std::make_pair(client_fd, client_info()));
-						inet_ntop(client.ss_family, in_addr((sockaddr*)&client), conns[client_fd].addr_str, sizeof conns[client_fd].addr_str);
-						int err = fcntl(client_fd, F_SETFL, O_NONBLOCK);
+						assert(!conns.count(cfd));
+						conns.insert(std::make_pair(cfd, client_info()));
+						inet_ntop(client.ss_family, in_addr((sockaddr*)&client), conns[cfd].addr_str, sizeof conns[cfd].addr_str);
+						int err = fcntl(cfd, F_SETFL, O_NONBLOCK);
 						chk(err);
 #ifdef SO_NOSIGPIPE
 						socklen_t val = 1;
-						err = setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
+						err = setsockopt(cfd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
 						chk(err);
 #endif
-						ret.push_back(packet(client_fd, ID_CONNECTION));
+						ret.emplace_back(packet(cfd, ID_CONNECTION));
 					}
 				}
 			}
