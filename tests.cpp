@@ -91,6 +91,7 @@ int main(int argc, char* argv[]) {
 			if (connected) {
 				size_t els = (rng() % _max_packet) + 60;
 				assert(els >= 60);
+
 				packet p(ID_USER);
 				p.resize(els);
 				for (auto i = 0; i < els; ++i) p[i] = '0' + i % 10;
@@ -99,7 +100,7 @@ int main(int argc, char* argv[]) {
 					LOG_S
 					cout << "sending " << p.size() << endl;
 				}
-				cl->send(p);
+				cl->send(std::move(p));
 			}
 		}
 	});

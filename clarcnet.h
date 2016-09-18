@@ -306,7 +306,9 @@ namespace clarcnet {
 	typedef std::unordered_map<int, client_info> conn_map;
 	
 	struct delayed_send {
-		delayed_send() : fd(-1), earliest(clk::now()) {}
+		delayed_send() : delayed_send(-1, packet(), clk::now()) {}
+		delayed_send(int fd, packet&& p, tp const& earliest) : fd(fd), p(p), earliest(earliest) {}
+
 		int    fd;
 		packet p;
 		tp     earliest;
@@ -478,7 +480,7 @@ namespace clarcnet {
 			}
 		}
 
-		ret_code send(int fd, packet& p) {
+		ret_code send(int fd, packet&& p) {
 			if (!lag_max.count()) {
 				return send_packet(fd, p);
 			} else {
@@ -489,11 +491,7 @@ namespace clarcnet {
 				);
 				ms lag(dist_lag(rng));
 				
-				delayed_send ds;
-				ds.fd       = fd;
-				ds.p        = p;
-				ds.earliest = clk::now() + lag;
-				send_backlog.push_back(ds);
+				send_backlog.emplace_back(delayed_send(fd, std::move(p), clk::now() + lag));
 				
 				return SUCCESS;
 			}
@@ -667,9 +665,9 @@ namespace clarcnet {
 			freeaddrinfo(res);
 		}
 
-		ret_code send(int fd, packet &p) {
+		ret_code send(int fd, packet&& p) {
 			if (!conns.count(fd)) return FAILURE;
-			return peer::send(fd, p);
+			return peer::send(fd, std::move(p));
 		}
 
 		packets process(bool accept_new = true) {
@@ -730,7 +728,7 @@ namespace clarcnet {
 					case DISCONNECTED:
 					{
 						fd_to_ci = disconnect(fd_to_ci);
-						ret.push_back(packet(cfd, ID_DISCONNECTION));
+						ret.emplace_back(packet(cfd, ID_DISCONNECTION));
 					}
 					continue;
 
@@ -742,7 +740,7 @@ namespace clarcnet {
 					ci.last_packet_recv = now;
 
 				if (now - ci.last_packet_recv > timeout) {
-					ret.push_back(packet(cfd, ID_TIMEOUT));
+					ret.emplace_back(packet(cfd, ID_TIMEOUT));
 					fd_to_ci = disconnect(fd_to_ci);
 					continue;
 				}
@@ -831,8 +829,8 @@ namespace clarcnet {
 			connected = false;
 		}
 
-		ret_code send(packet &p) {
-			return peer::send(this->fd, p);
+		ret_code send(packet&& p) {
+			return peer::send(this->fd, std::move(p));
 		}
 
 		packets process() {
@@ -849,7 +847,7 @@ namespace clarcnet {
 				if (timeout != ms(0)) {
 					auto waited = std::chrono::duration_cast<ms>(clk::now() - conn_start);
 					if (waited >= timeout) {
-						ret.push_back(packet(fd, ID_TIMEOUT));
+						ret.emplace_back(packet(fd, ID_TIMEOUT));
 						return ret;
 					}
 				}
@@ -860,7 +858,7 @@ namespace clarcnet {
 
 				freeaddrinfo(res);
 
-				ret.push_back(packet(fd, ID_CONNECTION));
+				ret.emplace_back(packet(fd, ID_CONNECTION));
 
 				return ret;
 			}
@@ -869,7 +867,7 @@ namespace clarcnet {
 			switch (code) {
 				case DISCONNECTED:
 				{
-					ret.push_back(packet(fd, ID_DISCONNECTION));
+					ret.emplace_back(packet(fd, ID_DISCONNECTION));
 					disconnect();
 				}
 				break;
@@ -885,16 +883,15 @@ namespace clarcnet {
 				if (p.mid != ID_HEARTBEAT) continue;
 
 				// Respond with copied heartbeat packet
-				packet resp(p);
-				if (send(resp) != SUCCESS) {
-					ret.push_back(packet(fd, ID_DISCONNECTION));
+				if (send(packet(p)) != SUCCESS) {
+					ret.emplace_back(packet(fd, ID_DISCONNECTION));
 					disconnect();
 					return ret;
 				}
 			}
 
 			if (timeout != ms(0) && clk::now() - last_packet_recv > timeout) {
-				ret.push_back(packet(fd, ID_TIMEOUT));
+				ret.emplace_back(packet(fd, ID_TIMEOUT));
 				disconnect();
 			}
 
