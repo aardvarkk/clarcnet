@@ -539,7 +539,6 @@ namespace clarcnet {
 					r.req   = 1 + header_bytes_req(r.w.front());
 				}
 
-				// Sometimes we don't require any additional header bytes!
 				if (r.state == receive_state::Header) {
 					auto code = recv_into(fd, &r.w[r.recvd], r.req - r.recvd, r.recvd);
 					if (code != SUCCESS) return code;
