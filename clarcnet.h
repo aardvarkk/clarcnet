@@ -71,9 +71,8 @@ namespace clarcnet {
 
 	struct streambuffer : std::vector<uint8_t> {
 		int    rpos;  // current reading position
-		size_t recvd; // can't use size() to determine what we've received -- may get less than we ask for on recv()
 
-		streambuffer() : rpos(0), recvd(0) {}
+		streambuffer() : rpos(0) {}
 
 		size_t r_size_t() {
 			uint8_t intro = r_int8_t();
@@ -246,7 +245,6 @@ namespace clarcnet {
 
 		int          fd;
 		uint8_t      mid;
-		streambuffer header;
 
 		packet() : packet(-1, ID_UNKNOWN) {}
 		packet(msg_id mid) : packet(-1, mid) {}
@@ -262,6 +260,52 @@ namespace clarcnet {
 		int    fd;
 		packet p;
 		tp     earliest;
+	};
+
+	// Returns ADDITIONAL bytes required in the header given the intro byte
+	size_t header_bytes_req(uint8_t intro) {
+		// payload <= 250 bytes
+		if (intro <= 0xFA) {
+			return 0;
+		}
+		// payload <= UINT8_MAX
+		else if (intro == 0xFB) {
+			return 1;
+		}
+		// payload <= UINT16_MAX
+		else if (intro == 0xFC) {
+			return 2;
+		}
+		// payload <= UINT32_MAX
+		else if (intro == 0xFD) {
+			return 4;
+		}
+		// payload <= UINT64_MAX
+		else if (intro == 0xFE) {
+			return 8;
+		}
+		else {
+			throw std::runtime_error("Invalid intro byte!");
+		}
+	}
+
+	struct receive_state {
+
+		receive_state() : state(MessageID), recvd(0), req(1) {
+			w.resize(1 + header_bytes_req(0xFE)); // request maximum header size
+		}
+
+		enum state {
+			MessageID,
+			HeaderIntro,
+			Header,
+			Payload
+		};
+
+		state  state; // current state
+		size_t recvd; // bytes received while in this state
+		size_t req;   // bytes required to exit this state
+		packet w;     // working packet to receive into
 	};
 
 	class peer {
@@ -371,9 +415,9 @@ namespace clarcnet {
 			if (p.mid == ID_HEARTBEAT) return code;
 
 			// Header
-			p.header.clear();
-			p.header.w_size_t(p.size());
-			code = send_sock(fd, &p.header.front(), p.header.size());
+			streambuffer header;
+			header.w_size_t(p.size());
+			code = send_sock(fd, &header.front(), header.size());
 			if (code != SUCCESS) return code;
 
 			// Payload
@@ -428,13 +472,13 @@ namespace clarcnet {
 		}
 
 		ret_code recv_into(int fd, void* buffer, size_t bytes, size_t& recvd) {
-			// Don't assume we got anything
-			recvd = 0;
+			if (!bytes) return SUCCESS;
+
 			// Try to retrieve exactly the number required
 			ssize_t len = recv(fd, buffer, bytes, 0);
 
 			// Mark the new size since we've received bytes
-			if (len > 0) recvd = len;
+			if (len > 0) recvd += len;
 
 			if (len == bytes) {
 				return SUCCESS;
@@ -457,100 +501,71 @@ namespace clarcnet {
 			}
 		}
 
-		ret_code recv_into(int fd, streambuffer& b, size_t bytes) {
-			// Expand as we receive more data
-			if (b.size() < b.recvd + bytes) b.resize(b.recvd + bytes);
-
-			// Try to retrieve exactly the number required
-			size_t recvd;
-			auto code = recv_into(fd, &*(b.begin() + b.recvd), bytes, recvd);
-
-			// Mark the new size since we've received bytes
-			if (recvd > 0) b.recvd += recvd;
-
-			return code;
-		}
-
-		void finish_packet(int fd, packet &w, packets &ps) {
+		void finish_packet(int fd, receive_state& r, packets &ps) {
 			assert(fd > 0);
-			w.fd = fd;
-			ps.emplace_back(std::move(w));
-			w = packet();
+			assert(r.recvd == r.req);
+			r.w.resize(r.req);
+			r.w.fd = fd;
+			ps.emplace_back(std::move(r.w));
+			r = receive_state();
 		}
 
-		// returns total header size (INCLUDING intro byte) required based on the intro byte itself
-		size_t header_bytes_req(uint8_t intro) {
-			// payload <= 250 bytes
-			if (intro <= 0xFA) {
-				return 1;
-			}
-			// payload <= UINT8_MAX
-			else if (intro == 0xFB) {
-				return 2;
-			}
-			// payload <= UINT16_MAX
-			else if (intro == 0xFC) {
-				return 3;
-			}
-			// payload <= UINT32_MAX
-			else if (intro == 0xFD) {
-				return 5;
-			}
-			// payload <= UINT64_MAX
-			else if (intro == 0xFE) {
-				return 9;
-			}
-			// heartbeat
-			else if (intro == 0xFF) {
-				return 1;
-			}
-			else {
-				throw std::runtime_error("Invalid intro byte!");
-			}
-		}
+		ret_code receive(int fd, receive_state& r, packets &ps) {
 
-		ret_code receive(int fd, packet &w, packets &ps) {
 			// Keep going while we are receiving packets!
 			for (;;) {
 
-				// Step 1 -- get the message ID
-				// Sending ID_UNKNOWN is unsupported as we will not take it as valid input
-				if (w.mid == ID_UNKNOWN) {
-					size_t recvd;
-					auto code = recv_into(fd, &w.mid, 1, recvd);
+				if (r.state == receive_state::MessageID) {
+					auto code = recv_into(fd, &r.w.mid, r.req - r.recvd, r.recvd);
 					if (code != SUCCESS) return code;
+
+					// If the message is a heartbeat, we're done!
+					if (r.w.mid == ID_HEARTBEAT) {
+						finish_packet(fd, r, ps);
+						continue;
+					}
+
+					r.state = receive_state::HeaderIntro;
+					r.recvd = 0;
+					r.req   = 1;
 				}
 
-				// Step 2 -- if the message is a heartbeat, we're done!
-				if (w.mid == ID_HEARTBEAT) {
-					finish_packet(fd, w, ps);
-					continue;
-				}
-
-				// Step 3 -- get the header intro byte
-				if (!w.header.recvd) {
-					auto code = recv_into(fd, w.header, 1);
+				if (r.state == receive_state::HeaderIntro) {
+					auto code = recv_into(fd, &r.w.front(), r.req - r.recvd, r.recvd);
 					if (code != SUCCESS) return code;
+
+					r.state = receive_state::Header;
+					r.recvd = 1;
+					r.req   = 1 + header_bytes_req(r.w.front());
 				}
 
-				// Step 4 -- get the rest of the header
-				auto header_sz_req = header_bytes_req(w.header.front());
-				if (w.header.recvd < header_sz_req) {
-					auto code = recv_into(fd, w.header, header_sz_req - w.header.recvd);
-
+				// Sometimes we don't require any additional header bytes!
+				if (r.state == receive_state::Header) {
+					auto code = recv_into(fd, &r.w[r.recvd], r.req - r.recvd, r.recvd);
 					if (code != SUCCESS) return code;
+
+					r.state = receive_state::Payload;
+					r.recvd = 0;
+					r.req   = r.w.r_size_t();
 				}
 
-				// Step 5 -- get the payload
-				w.header.rpos = 0;
-				auto payload_sz = w.header.r_size_t();
-				if (w.recvd < payload_sz) {
-					auto code = recv_into(fd, w, payload_sz - w.recvd);
+				if (r.state == receive_state::Payload) {
 
-					if (code != SUCCESS) return code;
+					for (;;) {
+
+						// allocate more space as necessary
+						// but don't resize directly to client request because they could make us allocate tons of memory!
+						if (r.w.size() < r.req) r.w.resize(r.w.size() * 2);
+
+						auto code = recv_into(fd, &r.w[r.recvd], std::min(r.w.size() - r.recvd, r.req - r.recvd), r.recvd);
+						if (code != SUCCESS) return code;
+
+						if (r.recvd == r.req) {
+							finish_packet(fd, r, ps);
+							break;
+						}
+					}
 				}
-
-				finish_packet(fd, w, ps);
 			}
 		}
 
@@ -651,7 +666,7 @@ namespace clarcnet {
 					}
 				}
 
-				auto code = receive(cfd, ci.w, ret);
+				auto code = receive(cfd, ci.r, ret);
 
 				switch (code) {
 				case DISCONNECTED:
@@ -698,14 +713,15 @@ namespace clarcnet {
 	protected:
 
 		struct client_info {
-			client_info() : last_packet_recv(clk::now())
+			client_info() : last_packet_recv(clk::now()), recvd(0)
 			{
 				std::fill(addr_str, addr_str + sizeof addr_str, 0);
 			}
 
-			char   addr_str[INET6_ADDRSTRLEN];
-			packet w; // working packet we're constructing
-			tp     last_packet_recv;
+			char          addr_str[INET6_ADDRSTRLEN];
+			receive_state r;
+			tp            last_packet_recv;
+			size_t        recvd; // number of bytes we've received from this client (pertaining to current packet)
 		};
 
 		typedef std::unordered_map<int, client_info> conn_map;
@@ -731,6 +747,7 @@ namespace clarcnet {
 			this->conn_start  = clk::now();
 			this->connected   = false;
 			this->timeout     = timeout;
+
 			addrinfo hints    = {};
 			hints.ai_family   = AF_UNSPEC;
 			hints.ai_socktype = SOCK_STREAM;
@@ -794,7 +811,7 @@ namespace clarcnet {
 				return ret;
 			}
 
-			auto code = receive(fd, w, ret);
+			auto code = receive(fd, r, ret);
 
 			switch (code) {
 			case DISCONNECTED:
@@ -832,11 +849,11 @@ namespace clarcnet {
 		}
 
 	protected:
-		tp        conn_start;
-		bool      connected;
-		tp        last_packet_recv;
-		packet    w; // working packet we're constructing
-		addrinfo* res;
-		ms        timeout;
+		tp            conn_start;
+		bool          connected;
+		tp            last_packet_recv;
+		receive_state r;
+		addrinfo*     res;
+		ms            timeout;
 	};
 }

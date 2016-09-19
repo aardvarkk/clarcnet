@@ -57,6 +57,8 @@ int main(int argc, char* argv[]) {
 				p.resize(els);
 				for (auto i = 0; i < els; ++i) p[i] = '0' + i % 10;
 				cl->send(std::move(p));
+
+				std::this_thread::sleep_for(std::chrono::seconds(1));
 			}
 		}
 	});

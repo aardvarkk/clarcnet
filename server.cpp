@@ -31,8 +31,7 @@ void network(server* sv) {
 					r.push_back('o');
 					r.push_back('m');
 					r.push_back('e');
-					auto sent = sv->send(p.fd, r);
-					assert(sent == r.size());
+					sv->send(p.fd, std::move(r));
 				}
 				break;
 
@@ -61,7 +60,7 @@ void network(server* sv) {
 int main(int argc, char* argv[]) {
 
 	server* sv = new server(1111);
-	cout << "created server at " << sv->addr_str << endl;
+	cout << "created server" << endl;
 
 	thread t(network, sv);
 
