@@ -41,19 +41,19 @@ namespace clarcnet {
 
 	enum msg_id : uint8_t {
 		ID_UNKNOWN,
+		ID_HEARTBEAT,
 		ID_CONNECTION,
 		ID_DISCONNECTION,
 		ID_TIMEOUT,
-		ID_HEARTBEAT,
 		ID_USER
 	};
 
 	static const char* msg_strs[ID_USER+1] = {
 		"ID_UNKNOWN",
+		"ID_HEARTBEAT",
 		"ID_CONNECTION",
 		"ID_DISCONNECTION",
 		"ID_TIMEOUT",
-		"ID_HEARTBEAT",
 		"ID_USER"
 	};
 
@@ -363,32 +363,18 @@ namespace clarcnet {
 		}
 
 		ret_code send_packet(int fd, packet &p) {
-			// Heartbeats are special messages (only one byte)
-			if (p.mid == ID_HEARTBEAT) {
-				uint8_t msg = 0xFF;
-				return send_sock(fd, &msg, 1);
-			}
+			// Message ID
+			auto code = send_sock(fd, &p.mid, sizeof(p.mid));
+			if (code != SUCCESS) return code;
 
-			// Only heartbeats can have empty payloads (and no message ID byte!)
-			if (p.empty()) {
-				return FAILURE;
-			}
+			// If it's a heartbeat, we're done!
+			if (p.mid == ID_HEARTBEAT) return code;
 
 			// Header
 			p.header.clear();
 			p.header.w_size_t(p.size());
-			auto code = send_sock(fd, &p.header.front(), p.header.size());
-
-			if (code != SUCCESS) {
-				return code;
-			}
-
-			// Message ID
-			code = send_sock(fd, &p.mid, sizeof(p.mid));
-
-			if (code != SUCCESS) {
-				return code;
-			}
+			code = send_sock(fd, &p.header.front(), p.header.size());
+			if (code != SUCCESS) return code;
 
 			// Payload
 			code = send_sock(fd, &p.front(), p.size());
@@ -526,34 +512,31 @@ namespace clarcnet {
 		ret_code receive(int fd, packet &w, packets &ps) {
 			// Keep going while we are receiving packets!
 			for (;;) {
-				// Step 1 -- get the intro byte
-				if (!w.header.recvd) {
-					auto code = recv_into(fd, w.header, 1);
 
-					if (code != SUCCESS) return code;
-				}
-
-				// Step 2 -- if the intro is a heartbeat, we're done!
-				if (w.header.front() == 0xFF) {
-					w.mid = ID_HEARTBEAT;
-					finish_packet(fd, w, ps);
-					continue;
-				}
-
-				// Step 3 -- get the rest of the header
-				auto header_sz_req = header_bytes_req(w.header.front());
-
-				if (w.header.recvd < header_sz_req) {
-					auto code = recv_into(fd, w.header, header_sz_req - w.header.recvd);
-
-					if (code != SUCCESS) return code;
-				}
-
-				// Step 4 -- get the message ID
+				// Step 1 -- get the message ID
 				// Sending ID_UNKNOWN is unsupported as we will not take it as valid input
 				if (w.mid == ID_UNKNOWN) {
 					size_t recvd;
 					auto code = recv_into(fd, &w.mid, 1, recvd);
+					if (code != SUCCESS) return code;
+				}
+
+				// Step 2 -- if the message is a heartbeat, we're done!
+				if (w.mid == ID_HEARTBEAT) {
+					finish_packet(fd, w, ps);
+					continue;
+				}
+
+				// Step 3 -- get the header intro byte
+				if (!w.header.recvd) {
+					auto code = recv_into(fd, w.header, 1);
+					if (code != SUCCESS) return code;
+				}
+
+				// Step 4 -- get the rest of the header
+				auto header_sz_req = header_bytes_req(w.header.front());
+				if (w.header.recvd < header_sz_req) {
+					auto code = recv_into(fd, w.header, header_sz_req - w.header.recvd);
 
 					if (code != SUCCESS) return code;
 				}
@@ -561,7 +544,6 @@ namespace clarcnet {
 				// Step 5 -- get the payload
 				w.header.rpos = 0;
 				auto payload_sz = w.header.r_size_t();
-
 				if (w.recvd < payload_sz) {
 					auto code = recv_into(fd, w, payload_sz - w.recvd);
 
@@ -662,13 +644,11 @@ namespace clarcnet {
 				int cfd = fd_to_ci->first;
 				client_info& ci = fd_to_ci->second;
 
-				if (now - ci.last_packet_sent >= heartbeat_period) {
+				if (now - ci.last_packet_recv >= heartbeat_period) {
 					if (send(cfd, packet(cfd, ID_HEARTBEAT)) != SUCCESS) {
 						disconnect(cfd);
 						continue;
 					}
-
-					ci.last_packet_sent = now;
 				}
 
 				auto code = receive(cfd, ci.w, ret);
@@ -718,16 +698,13 @@ namespace clarcnet {
 	protected:
 
 		struct client_info {
-			client_info() :
-				last_packet_sent(clk::now()),
-				last_packet_recv(clk::now())
+			client_info() : last_packet_recv(clk::now())
 			{
 				std::fill(addr_str, addr_str + sizeof addr_str, 0);
 			}
 
 			char   addr_str[INET6_ADDRSTRLEN];
 			packet w; // working packet we're constructing
-			tp     last_packet_sent;
 			tp     last_packet_recv;
 		};
 
@@ -797,9 +774,7 @@ namespace clarcnet {
 			flush_backlog();
 			packets ret;
 
-			if (fd < 0) {
-				return ret;
-			}
+			if (fd < 0) return ret;
 
 			if (!connected) {
 				if (timeout != ms(0)) {
