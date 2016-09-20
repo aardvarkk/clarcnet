@@ -263,7 +263,7 @@ namespace clarcnet {
 	};
 
 	// Returns ADDITIONAL bytes required in the header given the intro byte
-	size_t header_bytes_req(uint8_t intro) {
+	static size_t header_bytes_req(uint8_t intro) {
 		// payload <= 250 bytes
 		if (intro <= 0xFA) {
 			return 0;
@@ -318,15 +318,9 @@ namespace clarcnet {
 		}
 
 		ret_code close(int fd) {
-			if (fd >= 0) {
-				int err = ::close(fd);
-
-				if (err < 0 && errno != EBADF) thr;
-
-				return SUCCESS;
-			} else {
-				return DISCONNECTED;
-			}
+			int err = ::close(fd);
+			chk(err);
+			return SUCCESS;
 		}
 
 		int fd;
@@ -376,7 +370,8 @@ namespace clarcnet {
 		}
 
 		ret_code send_sock(int fd, void const* data, size_t sz) {
-			assert(sz);
+			if (sz == 0) return SUCCESS;
+
 			size_t sent = 0;
 
 			while (sent < sz) {
@@ -504,6 +499,7 @@ namespace clarcnet {
 		void finish_packet(int fd, receive_state& r, packets &ps) {
 			assert(fd > 0);
 			assert(r.recvd == r.req);
+			r.w.rpos = 0;
 			r.w.resize(r.req);
 			r.w.fd = fd;
 			ps.emplace_back(std::move(r.w));
@@ -658,35 +654,28 @@ namespace clarcnet {
 				int cfd = fd_to_ci->first;
 				client_info& ci = fd_to_ci->second;
 
-				if (now - ci.last_packet_recv >= heartbeat_period) {
-					if (send(cfd, packet(cfd, ID_HEARTBEAT)) != SUCCESS) {
-						disconnect(cfd);
-						continue;
-					}
-				}
-
 				auto code = receive(cfd, ci.r, ret);
 
-				switch (code) {
-				case DISCONNECTED:
-				{
-					fd_to_ci = disconnect(fd_to_ci);
+				if (code == DISCONNECTED) {
 					ret.emplace_back(packet(cfd, ID_DISCONNECTION));
-				}
-
-				continue;
-
-				default:
-					break;
-				}
-
-				if (!ret.empty())
-					ci.last_packet_recv = now;
-
-				if (now - ci.last_packet_recv > timeout) {
-					ret.emplace_back(packet(cfd, ID_TIMEOUT));
 					fd_to_ci = disconnect(fd_to_ci);
 					continue;
+				} else {
+					if (!ret.empty()) ci.last_packet_recv = now;
+
+					if (now - ci.last_packet_recv > timeout) {
+						ret.emplace_back(packet(cfd, ID_TIMEOUT));
+						fd_to_ci = disconnect(fd_to_ci);
+						continue;
+					}
+
+					if (now - ci.last_packet_recv >= heartbeat_period) {
+						if (send(cfd, packet(cfd, ID_HEARTBEAT)) != SUCCESS) {
+							ret.emplace_back(packet(cfd, ID_DISCONNECTION));
+							fd_to_ci = disconnect(fd_to_ci);
+							continue;
+						}
+					}
 				}
 
 				++fd_to_ci;
@@ -701,12 +690,12 @@ namespace clarcnet {
 			return fd_to_ci == conns.end() ? "" : fd_to_ci->second.addr_str;
 		}
 
+		// External disconnect -- called by others
+		// Since they pass a file descriptor, we know we can close it and reuse it since they should be done with it
 		void disconnect(int cfd) {
-			auto it = conns.find(cfd);
-
-			if (it == conns.end()) return;
-
-			disconnect(it);
+			auto conn_it = conns.find(cfd);
+			if (conn_it != conns.end()) disconnect(conn_it);
+			peer::close(cfd);
 		}
 
 	protected:
@@ -725,13 +714,13 @@ namespace clarcnet {
 
 		typedef std::unordered_map<int, client_info> conn_map;
 
+		// Internal disconnect -- called when we determine a client has disconnected or inactive
 		conn_map::iterator disconnect(conn_map::iterator conn_it) {
 			int cfd = conn_it->first;
 			delayed.erase(remove_if(delayed.begin(), delayed.end(),
 			[=](delayed_send const& ds) {
 				return ds.fd == cfd;
 			}), delayed.end());
-			close(conn_it->first);
 			return conns.erase(conn_it);
 		}
 
@@ -777,7 +766,7 @@ namespace clarcnet {
 		}
 
 		void disconnect() {
-			close(fd);
+			peer::close(fd);
 			fd = -1;
 			connected = false;
 		}
@@ -812,37 +801,26 @@ namespace clarcnet {
 
 			auto code = receive(fd, r, ret);
 
-			switch (code) {
-			case DISCONNECTED:
-			{
+			if (code == DISCONNECTED) {
 				ret.emplace_back(packet(fd, ID_DISCONNECTION));
-				disconnect();
+				return ret;
 			}
-			break;
-
-			default:
-				break;
-			}
-
-			if (!ret.empty())
-				last_packet_recv = clk::now();
+		
+			if (!ret.empty()) last_packet_recv = clk::now();
 
 			for (auto const& p : ret) {
 				if (p.mid != ID_HEARTBEAT) continue;
-
-				// Respond with copied heartbeat packet
 				if (send(packet(p)) != SUCCESS) {
 					ret.emplace_back(packet(fd, ID_DISCONNECTION));
-					disconnect();
 					return ret;
 				}
 			}
 
 			if (timeout != ms(0) && clk::now() - last_packet_recv > timeout) {
 				ret.emplace_back(packet(fd, ID_TIMEOUT));
-				disconnect();
+				return ret;
 			}
-
+			
 			remove_heartbeats(ret);
 			return ret;
 		}
