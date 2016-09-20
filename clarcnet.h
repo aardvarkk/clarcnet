@@ -41,18 +41,20 @@ namespace clarcnet {
 
 	enum msg_id : uint8_t {
 		ID_UNKNOWN,
-		ID_HEARTBEAT,
+		ID_VERSION,
 		ID_CONNECTION,
 		ID_DISCONNECTION,
+		ID_HEARTBEAT,
 		ID_TIMEOUT,
 		ID_USER
 	};
 
 	static const char* msg_strs[ID_USER+1] = {
 		"ID_UNKNOWN",
-		"ID_HEARTBEAT",
+		"ID_VERSION",
 		"ID_CONNECTION",
 		"ID_DISCONNECTION",
+		"ID_HEARTBEAT",
 		"ID_TIMEOUT",
 		"ID_USER"
 	};
