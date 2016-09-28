@@ -613,11 +613,15 @@ namespace clarcnet {
 		}
 
 		ret_code send(int fd, packet&& p) {
-			if (!conns.count(fd)) return FAILURE;
+			auto it = conns.find(fd);
+			if (it == conns.end()) return FAILURE;
 
-			return peer::send(fd, std::move(p));
+			auto code = peer::send(fd, std::move(p));
+			if (code == SUCCESS) it->second.last_packet_sent = clk::now();
+			return code;
 		}
 
+		// server
 		packets process(bool accept_new = true) {
 			flush_backlog();
 			packets ret;
@@ -671,7 +675,7 @@ namespace clarcnet {
 						continue;
 					}
 
-					if (now - ci.last_packet_recv >= heartbeat_period) {
+					if (now - max(ci.last_packet_sent, ci.last_packet_recv) >= heartbeat_period) {
 						if (send(cfd, packet(cfd, ID_HEARTBEAT)) != SUCCESS) {
 							ret.emplace_back(packet(cfd, ID_DISCONNECTION));
 							fd_to_ci = disconnect(fd_to_ci);
@@ -710,8 +714,9 @@ namespace clarcnet {
 
 			char          addr_str[INET6_ADDRSTRLEN];
 			receive_state r;
-			tp            last_packet_recv;
-			size_t        recvd; // number of bytes we've received from this client (pertaining to current packet)
+			tp            last_packet_recv; // force timeout of client if they haven't responded
+			tp            last_packet_sent; // know when to send more heartbeats
+			size_t        recvd;            // number of bytes we've received from this client (pertaining to current packet)
 		};
 
 		typedef std::unordered_map<int, client_info> conn_map;
