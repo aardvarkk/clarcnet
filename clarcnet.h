@@ -660,14 +660,16 @@ namespace clarcnet {
 				int cfd = fd_to_ci->first;
 				client_info& ci = fd_to_ci->second;
 
-				auto code = receive(cfd, ci.r, ret);
+				auto sz_pre = ret.size();
+				auto code   = receive(cfd, ci.r, ret);
+				auto sz_pst = ret.size();
 
 				if (code == DISCONNECTED) {
 					ret.emplace_back(packet(cfd, ID_DISCONNECTION));
 					fd_to_ci = disconnect(fd_to_ci);
 					continue;
 				} else {
-					if (!ret.empty()) ci.last_packet_recv = now;
+					if (sz_pst != sz_pre) ci.last_packet_recv = now;
 
 					if (now - ci.last_packet_recv > timeout) {
 						ret.emplace_back(packet(cfd, ID_TIMEOUT));
