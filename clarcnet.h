@@ -310,6 +310,18 @@ namespace clarcnet {
 		packet w;     // working packet to receive into
 	};
 
+	struct conn_info {
+		conn_info() : last_packet_recv(clk::now())
+		{
+			std::fill(addr_str, addr_str + sizeof addr_str, 0);
+		}
+
+		char          addr_str[INET6_ADDRSTRLEN];
+		receive_state r;
+		tp            last_packet_recv;    // force timeout of client if they haven't responded
+		tp            last_heartbeat_sent; // know when to send more heartbeats
+	};
+
 	class peer {
 
 	public:
@@ -498,17 +510,20 @@ namespace clarcnet {
 			}
 		}
 
-		void finish_packet(int fd, receive_state& r, packets &ps) {
+		void finish_packet(int fd, conn_info &ci, packets &ps) {
 			assert(fd > 0);
-			assert(r.recvd == r.req);
-			r.w.rpos = 0;
-			r.w.resize(r.req);
-			r.w.fd = fd;
-			ps.emplace_back(std::move(r.w));
-			r = receive_state();
+			assert(ci.r.recvd == ci.r.req);
+			ci.r.w.rpos = 0;
+			ci.r.w.resize(ci.r.req);
+			ci.r.w.fd = fd;
+			ps.emplace_back(std::move(ci.r.w));
+			ci.r = receive_state();
+			ci.last_packet_recv = clk::now();
 		}
 
-		ret_code receive(int fd, receive_state& r, packets &ps) {
+		ret_code receive(int fd, conn_info &ci, packets &ps) {
+
+			receive_state& r = ci.r;
 
 			// Keep going while we are receiving packets!
 			for (;;) {
@@ -519,7 +534,7 @@ namespace clarcnet {
 
 					// If the message is a heartbeat, we're done!
 					if (r.w.mid == ID_HEARTBEAT) {
-						finish_packet(fd, r, ps);
+						finish_packet(fd, ci, ps);
 						continue;
 					}
 
@@ -558,7 +573,7 @@ namespace clarcnet {
 						if (code != SUCCESS) return code;
 
 						if (r.recvd == r.req) {
-							finish_packet(fd, r, ps);
+							finish_packet(fd, ci, ps);
 							break;
 						}
 					}
@@ -617,7 +632,6 @@ namespace clarcnet {
 			if (it == conns.end()) return FAILURE;
 
 			auto code = peer::send(fd, std::move(p));
-			if (code == SUCCESS) it->second.last_packet_sent = clk::now();
 			return code;
 		}
 
@@ -640,7 +654,7 @@ namespace clarcnet {
 						}
 					} else {
 						assert(!conns.count(cfd));
-						conns.insert(std::make_pair(cfd, client_info()));
+						conns.insert(std::make_pair(cfd, conn_info()));
 						inet_ntop(client.ss_family, in_addr((sockaddr*)&client), conns[cfd].addr_str, sizeof conns[cfd].addr_str);
 						int err = fcntl(cfd, F_SETFL, O_NONBLOCK);
 						chk(err);
@@ -658,31 +672,28 @@ namespace clarcnet {
 
 			for (auto fd_to_ci = conns.begin(); fd_to_ci != conns.end();) {
 				int cfd = fd_to_ci->first;
-				client_info& ci = fd_to_ci->second;
+				conn_info& ci = fd_to_ci->second;
 
-				auto sz_pre = ret.size();
-				auto code   = receive(cfd, ci.r, ret);
-				auto sz_pst = ret.size();
+				auto code = receive(cfd, ci, ret);
 
 				if (code == DISCONNECTED) {
 					ret.emplace_back(packet(cfd, ID_DISCONNECTION));
 					fd_to_ci = disconnect(fd_to_ci);
 					continue;
 				} else {
-					if (sz_pst != sz_pre) ci.last_packet_recv = now;
-
 					if (now - ci.last_packet_recv > timeout) {
 						ret.emplace_back(packet(cfd, ID_TIMEOUT));
 						fd_to_ci = disconnect(fd_to_ci);
 						continue;
 					}
 
-					if (now - max(ci.last_packet_sent, ci.last_packet_recv) >= heartbeat_period) {
+					if (now - max(ci.last_heartbeat_sent, ci.last_packet_recv) >= heartbeat_period) {
 						if (send(cfd, packet(cfd, ID_HEARTBEAT)) != SUCCESS) {
 							ret.emplace_back(packet(cfd, ID_DISCONNECTION));
 							fd_to_ci = disconnect(fd_to_ci);
 							continue;
 						}
+						ci.last_heartbeat_sent = now;
 					}
 				}
 
@@ -708,20 +719,7 @@ namespace clarcnet {
 
 	protected:
 
-		struct client_info {
-			client_info() : last_packet_recv(clk::now()), recvd(0)
-			{
-				std::fill(addr_str, addr_str + sizeof addr_str, 0);
-			}
-
-			char          addr_str[INET6_ADDRSTRLEN];
-			receive_state r;
-			tp            last_packet_recv; // force timeout of client if they haven't responded
-			tp            last_packet_sent; // know when to send more heartbeats
-			size_t        recvd;            // number of bytes we've received from this client (pertaining to current packet)
-		};
-
-		typedef std::unordered_map<int, client_info> conn_map;
+		typedef std::unordered_map<int, conn_info> conn_map;
 
 		// Internal disconnect -- called when we determine a client has disconnected or inactive
 		conn_map::iterator disconnect(conn_map::iterator conn_it) {
@@ -740,7 +738,7 @@ namespace clarcnet {
 
 	class client : public peer {
 	public:
-		client(std::string const& host, uint16_t port, ms timeout = ms(0)) : last_packet_recv(clk::now()) {
+		client(std::string const& host, uint16_t port, ms timeout = ms(0)) {
 			this->conn_start  = clk::now();
 			this->connected   = false;
 			this->timeout     = timeout;
@@ -808,15 +806,13 @@ namespace clarcnet {
 				return ret;
 			}
 
-			auto code = receive(fd, r, ret);
+			auto code = receive(fd, ci, ret);
 
 			if (code == DISCONNECTED) {
 				ret.emplace_back(packet(fd, ID_DISCONNECTION));
 				return ret;
 			}
 		
-			if (!ret.empty()) last_packet_recv = clk::now();
-
 			for (auto const& p : ret) {
 				if (p.mid != ID_HEARTBEAT) continue;
 				if (send(packet(p)) != SUCCESS) {
@@ -825,7 +821,7 @@ namespace clarcnet {
 				}
 			}
 
-			if (timeout != ms(0) && clk::now() - last_packet_recv > timeout) {
+			if (timeout != ms(0) && clk::now() - ci.last_packet_recv > timeout) {
 				ret.emplace_back(packet(fd, ID_TIMEOUT));
 				return ret;
 			}
@@ -835,11 +831,10 @@ namespace clarcnet {
 		}
 
 	protected:
-		tp            conn_start;
-		bool          connected;
-		tp            last_packet_recv;
-		receive_state r;
-		addrinfo*     res;
-		ms            timeout;
+		tp        conn_start;
+		bool      connected;
+		conn_info ci;
+		addrinfo* res;
+		ms        timeout;
 	};
 }
