@@ -521,6 +521,7 @@ namespace clarcnet {
 			ci.last_packet_recv = clk::now();
 		}
 
+		// peer
 		ret_code receive(int fd, conn_info &ci, packets &ps) {
 
 			receive_state& r = ci.r;
@@ -698,6 +699,15 @@ namespace clarcnet {
 				}
 
 				++fd_to_ci;
+			}
+
+			// TEMP: Deal with old versions
+			// Anybody who sent unknown, respond with OLD version style
+			for (auto const& p : ret) {
+				if (p.mid == ID_UNKNOWN) {
+					const unsigned char data[] = { 0x00, 0x00, 0x00, 0x0B, 0x05, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+					send_sock(p.fd, data, 11);
+				}
 			}
 
 			remove_heartbeats(ret);
