@@ -810,6 +810,8 @@ namespace clarcnet {
 
 				if (!poll_write()) return ret;
 
+				inet_ntop(res->ai_family, in_addr(res->ai_addr), ci.addr_str, sizeof ci.addr_str);
+
 				connected = true;
 				freeaddrinfo(res);
 				ret.emplace_back(packet(fd, ID_CONNECTION));
@@ -838,6 +840,10 @@ namespace clarcnet {
 			
 			remove_heartbeats(ret);
 			return ret;
+		}
+
+		std::string address() {
+			return ci.addr_str;
 		}
 
 	protected:
