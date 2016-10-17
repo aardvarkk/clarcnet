@@ -62,6 +62,7 @@ namespace clarcnet {
 	typedef std::chrono::high_resolution_clock clk;
 	typedef std::chrono::milliseconds          ms;
 	typedef std::chrono::time_point<clk>       tp;
+	typedef uint64_t                           len;
 
 	enum ret_code
 	{
@@ -72,11 +73,11 @@ namespace clarcnet {
 	};
 
 	struct streambuffer : std::vector<uint8_t> {
-		int    rpos;  // current reading position
+		int rpos;  // current reading position
 
 		streambuffer() : rpos(0) {}
 
-		size_t r_size_t() {
+		len r_len() {
 			uint8_t intro = r_int8_t();
 
 			if (intro <= 0xFA) {
@@ -98,25 +99,25 @@ namespace clarcnet {
 			throw std::runtime_error("Invalid size!");
 		}
 
-		void w_size_t(size_t const& sz) {
-			if (sz <= 0xFA) {
-				w_int8_t(sz);
+		void w_len(const len &l) {
+			if (l <= 0xFA) {
+				w_int8_t(l);
 			}
-			else if (sz <= UINT8_MAX) {
+			else if (l <= UINT8_MAX) {
 				w_int8_t(0xFB);
-				w_int8_t(sz);
+				w_int8_t(l);
 			}
-			else if (sz <= UINT16_MAX) {
+			else if (l <= UINT16_MAX) {
 				w_int8_t(0xFC);
-				w_int16_t(sz);
+				w_int16_t(l);
 			}
-			else if (sz <= UINT32_MAX) {
+			else if (l <= UINT32_MAX) {
 				w_int8_t(0xFD);
-				w_int32_t(static_cast<int32_t>(sz));
+				w_int32_t(static_cast<int32_t>(l));
 			}
-			else if (sz <= UINT64_MAX) {
+			else if (l <= UINT64_MAX) {
 				w_int8_t(0xFE);
-				w_int64_t(sz);
+				w_int64_t(l);
 			} else {
 				throw std::runtime_error("Invalid size!");
 			}
@@ -134,7 +135,7 @@ namespace clarcnet {
 
 		std::vector<uint8_t> r_vuint8_t() {
 			std::vector<uint8_t> vec;
-			vec.resize(r_size_t());
+			vec.resize(r_len());
 
 			for (auto& v : vec) v = r_int8_t();
 
@@ -142,7 +143,7 @@ namespace clarcnet {
 		}
 
 		void w_vuint8_t(std::vector<uint8_t> const& vec) {
-			w_size_t(vec.size());
+			w_len(vec.size());
 			insert(end(), vec.begin(), vec.end());
 		}
 
@@ -180,7 +181,7 @@ namespace clarcnet {
 
 		std::vector<uint32_t> r_vuint32_t() {
 			std::vector<uint32_t> vec;
-			vec.resize(r_size_t());
+			vec.resize(r_len());
 
 			for (auto& v : vec) v = r_int32_t();
 
@@ -188,7 +189,7 @@ namespace clarcnet {
 		}
 
 		void w_vuint32_t(std::vector<uint32_t> const& vec) {
-			w_size_t(vec.size());
+			w_len(vec.size());
 
 			for (auto const& v : vec) w_int32_t(v);
 		}
@@ -215,7 +216,7 @@ namespace clarcnet {
 
 		std::vector<uint64_t> r_vuint64_t() {
 			std::vector<uint64_t> vec;
-			vec.resize(r_size_t());
+			vec.resize(r_len());
 
 			for (auto& v : vec) v = r_int64_t();
 
@@ -223,14 +224,14 @@ namespace clarcnet {
 		}
 
 		void w_vuint64_t(std::vector<uint64_t> const& vec) {
-			w_size_t(vec.size());
+			w_len(vec.size());
 
 			for (auto const& v : vec) w_int64_t(v);
 		}
 
 		std::string r_string() {
 			std::string str;
-			auto sz = r_size_t();
+			auto sz = r_len();
 			uint8_t* p = &this->operator[](rpos);
 			str = std::string(p, p + sz);
 			rpos += sz;
@@ -238,7 +239,7 @@ namespace clarcnet {
 		}
 
 		void w_string(std::string const& str) {
-			w_size_t(str.length());
+			w_len(str.length());
 			insert(end(), str.begin(), str.end());
 		}
 	};
@@ -425,7 +426,7 @@ namespace clarcnet {
 
 			// Header
 			streambuffer header;
-			header.w_size_t(p.size());
+			header.w_len(p.size());
 			code = send_sock(fd, &header.front(), header.size());
 			if (code != SUCCESS) return code;
 
@@ -559,7 +560,7 @@ namespace clarcnet {
 
 					r.state = receive_state::Payload;
 					r.recvd = 0;
-					r.req   = r.w.r_size_t();
+					r.req   = r.w.r_len();
 				}
 
 				if (r.state == receive_state::Payload) {
