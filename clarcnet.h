@@ -25,14 +25,14 @@
 
 namespace clarcnet {
 
-#define thr \
-	 	throw std::runtime_error(\
-	 			std::string(__FILE__) + ":" +\
-	 			std::to_string(__LINE__) + " " +\
-	 			std::string(strerror(errno)) + " (" +\
-				std::to_string(errno) + ")");
+	#define thr \
+	throw std::runtime_error(\
+			std::string(__FILE__) + ":" +\
+			std::to_string(__LINE__) + " " +\
+			std::string(strerror(errno)) + " (" +\
+			std::to_string(errno) + ")");
 
-#define chk(val) \
+	#define chk(val) \
 	{\
 		if (val < 0) {\
 			thr;\
@@ -62,6 +62,17 @@ namespace clarcnet {
 	typedef std::chrono::high_resolution_clock clk;
 	typedef std::chrono::milliseconds          ms;
 	typedef std::chrono::time_point<clk>       tp;
+	
+	struct len_t {
+		len_t() : v(0) {}
+		len_t(uint64_t l) : v(l) {}
+		
+		bool   operator==(len_t const& l) { return v == l.v; }
+		len_t& operator+=(len_t const& l) { v += l.v; return *this; }
+		len_t  operator- (len_t const& l) { return v - l.v; }
+		
+		uint64_t v;
+	};
 
 	enum ret_code
 	{
@@ -72,177 +83,189 @@ namespace clarcnet {
 	};
 
 	struct streambuffer : std::vector<uint8_t> {
-		int    rpos;  // current reading position
+		int rpos;    // current reading position
+		int binplcs; // number of binary decimal places for read/write floating point
 
-		streambuffer() : rpos(0) {}
+		streambuffer() : rpos(0), binplcs(16) {}
 
-		size_t r_size_t() {
-			uint8_t intro = r_int8_t();
+		template <typename T>
+		void srlz(bool w, T& val);
+	};
 
-			if (intro <= 0xFA) {
-				return intro;
-			}
-			else if (intro == 0xFB) {
-				return static_cast<uint8_t>(r_int8_t());
-			}
-			else if (intro == 0xFC) {
-				return static_cast<uint16_t>(r_int16_t());
-			}
-			else if (intro == 0xFD) {
-				return static_cast<uint32_t>(r_int32_t());
-			}
-			else if (intro == 0xFE) {
-				return static_cast<uint64_t>(r_int64_t());
-			}
-
-			throw std::runtime_error("Invalid size!");
+	template <>
+	inline void streambuffer::srlz(bool w, uint8_t& val)
+	{
+		if (w) {
+			push_back(val);
+		} else {
+			val = this->operator[](rpos);
+			rpos += sizeof val;
 		}
-
-		void w_size_t(size_t const& sz) {
-			if (sz <= 0xFA) {
-				w_int8_t(sz);
+	}
+	
+	template <>
+	inline void streambuffer::srlz(bool w, bool& val)
+	{
+		if (w) {
+			push_back(val);
+		} else {
+			val = this->operator[](rpos);
+			rpos += sizeof val;
+		}
+	}
+	
+	template <>
+	inline void streambuffer::srlz(bool w, uint16_t& val)
+	{
+		if (w) {
+			uint16_t vn = htons(val);
+			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
+			insert(end(), p, p + sizeof val);
+		} else {
+			val = ntohs(*reinterpret_cast<uint16_t*>(&this->operator[](rpos)));
+			rpos += sizeof val;
+		}
+	}
+	
+	template <>
+	inline void streambuffer::srlz(bool w, uint32_t& val)
+	{
+		if (w) {
+			uint32_t vn = htonl(val);
+			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
+			insert(end(), p, p + sizeof val);
+		} else {
+			val = ntohl(*reinterpret_cast<uint32_t*>(&this->operator[](rpos)));
+			rpos += sizeof val;
+		}
+	}
+	
+	template <>
+	inline void streambuffer::srlz(bool w, uint64_t& val)
+	{
+		if (w) {
+			#ifdef __linux
+			uint64_t vn = htobe64(val);
+			#else
+			uint64_t vn = htonll(val);
+			#endif
+			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
+			insert(end(), p, p + sizeof val);
+		} else {
+			#ifdef __linux
+			val = be64toh(*reinterpret_cast<uint64_t*>(&this->operator[](rpos)));
+			#else
+			val = ntohll (*reinterpret_cast<uint64_t*>(&this->operator[](rpos)));
+			#endif
+			rpos += sizeof val;
+		}
+	}
+	
+	template <>
+	inline void streambuffer::srlz(bool w, float& val)
+	{
+		if (w) {
+			int32_t ival = val * (1<<binplcs);
+			srlz(w, ival);
+		} else {
+			int32_t ival;
+			srlz(w, ival);
+			val = ival / (1<<binplcs);
+		}
+	}
+	
+	template <>
+	inline void streambuffer::srlz(bool w, len_t& val)
+	{
+		if (w) {
+			if (val.v <= 0xFA) {
+				uint8_t v = val.v;
+				srlz(w, v);
 			}
-			else if (sz <= UINT8_MAX) {
-				w_int8_t(0xFB);
-				w_int8_t(sz);
+			else if (val.v <= UINT8_MAX) {
+				uint8_t intro = 0xFB;
+				srlz(w, intro);
+				uint8_t v = static_cast<uint8_t>(val.v);
+				srlz(w, v);
 			}
-			else if (sz <= UINT16_MAX) {
-				w_int8_t(0xFC);
-				w_int16_t(sz);
+			else if (val.v <= UINT16_MAX) {
+				uint8_t intro = 0xFC;
+				srlz(w, intro);
+				uint16_t v = static_cast<uint16_t>(val.v);
+				srlz(w, v);
 			}
-			else if (sz <= UINT32_MAX) {
-				w_int8_t(0xFD);
-				w_int32_t(static_cast<int32_t>(sz));
+			else if (val.v <= UINT32_MAX) {
+				uint8_t intro = 0xFD;
+				srlz(w, intro);
+				uint32_t v = static_cast<uint32_t>(val.v);
+				srlz(w, v);
 			}
-			else if (sz <= UINT64_MAX) {
-				w_int8_t(0xFE);
-				w_int64_t(sz);
+			else if (val.v <= UINT64_MAX) {
+				uint8_t intro = 0xFE;
+				srlz(w, intro);
+				srlz(w, val.v);
 			} else {
 				throw std::runtime_error("Invalid size!");
 			}
+		} else {
+			uint8_t intro;
+			srlz(w, intro);
+
+			if (intro <= 0xFA) {
+				val.v = intro;
+			}
+			else if (intro == 0xFB) {
+				uint8_t v;
+				srlz(w, v);
+				val.v = v;
+			}
+			else if (intro == 0xFC) {
+				uint16_t v;
+				srlz(w, v);
+				val.v = v;
+			}
+			else if (intro == 0xFD) {
+				uint32_t v;
+				srlz(w, v);
+				val.v = v;
+			}
+			else if (intro == 0xFE) {
+				uint64_t v;
+				srlz(w, v);
+				val.v = v;
+			}
+			else {
+				throw std::runtime_error("Invalid size!");
+			}
 		}
+	}
 
-		int8_t r_int8_t() {
-			int8_t v = this->operator[](rpos);
-			rpos += sizeof v;
-			return v;
-		}
-
-		void w_int8_t(int8_t const& v) {
-			push_back(v);
-		}
-
-		std::vector<uint8_t> r_vuint8_t() {
-			std::vector<uint8_t> vec;
-			vec.resize(r_size_t());
-
-			for (auto& v : vec) v = r_int8_t();
-
-			return vec;
-		}
-
-		void w_vuint8_t(std::vector<uint8_t> const& vec) {
-			w_size_t(vec.size());
-			insert(end(), vec.begin(), vec.end());
-		}
-
-		int16_t r_int16_t() {
-			int16_t v = ntohs(*reinterpret_cast<int16_t*>(&this->operator[](rpos)));
-			rpos += sizeof v;
-			return v;
-		}
-
-		void w_int16_t(int16_t const& v) {
-			int16_t vn = htons(v);
-			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
-			insert(end(), p, p + sizeof v);
-		}
-
-		int32_t r_int32_t() {
-			int32_t v = ntohl(*reinterpret_cast<int32_t*>(&this->operator[](rpos)));
-			rpos += sizeof v;
-			return v;
-		}
-
-		void w_int32_t(int32_t const& v) {
-			int32_t vn = htonl(v);
-			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
-			insert(end(), p, p + sizeof v);
-		}
-
-		float r_float(int binplcs = 16) {
-			return static_cast<float>(r_int32_t()) / (1<<binplcs);
-		}
-
-		void w_float(float const& v, int binplcs = 16) {
-			return w_int32_t(static_cast<int32_t>(v * (1<<binplcs)));
-		}
-
-		std::vector<uint32_t> r_vuint32_t() {
-			std::vector<uint32_t> vec;
-			vec.resize(r_size_t());
-
-			for (auto& v : vec) v = r_int32_t();
-
-			return vec;
-		}
-
-		void w_vuint32_t(std::vector<uint32_t> const& vec) {
-			w_size_t(vec.size());
-
-			for (auto const& v : vec) w_int32_t(v);
-		}
-
-		int64_t r_int64_t() {
-#ifdef __linux
-			int64_t v = be64toh(*reinterpret_cast<int64_t*>(&this->operator[](rpos)));
-#else
-			int64_t v = ntohll(*reinterpret_cast<int64_t*>(&this->operator[](rpos)));
-#endif
-			rpos += sizeof v;
-			return v;
-		}
-
-		void w_int64_t(int64_t const& v) {
-#ifdef __linux
-			int64_t vn = htobe64(v);
-#else
-			int64_t vn = htonll(v);
-#endif
-			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
-			insert(end(), p, p + sizeof v);
-		}
-
-		std::vector<uint64_t> r_vuint64_t() {
-			std::vector<uint64_t> vec;
-			vec.resize(r_size_t());
-
-			for (auto& v : vec) v = r_int64_t();
-
-			return vec;
-		}
-
-		void w_vuint64_t(std::vector<uint64_t> const& vec) {
-			w_size_t(vec.size());
-
-			for (auto const& v : vec) w_int64_t(v);
-		}
-
-		std::string r_string() {
-			std::string str;
-			auto sz = r_size_t();
+	// Default fall-through for enum types
+	template <typename T>
+	inline void streambuffer::srlz(bool w, T& val)
+	{
+		len_t l(val);
+		srlz(w, l);
+		val = static_cast<T>(l.v);
+	}
+	
+	template <>
+	inline void streambuffer::srlz(bool w, std::string& val)
+	{
+		if (w) {
+			len_t l(val.size());
+			srlz(w, l);
+			insert(end(), val.begin(), val.end());
+		} else {
+			len_t l;
+			srlz(w, l);
+			
 			uint8_t* p = &this->operator[](rpos);
-			str = std::string(p, p + sz);
-			rpos += sz;
-			return str;
+			val = std::string(p, p + l.v);
+			rpos += l.v;
 		}
-
-		void w_string(std::string const& str) {
-			w_size_t(str.length());
-			insert(end(), str.begin(), str.end());
-		}
-	};
-
+	}
+	
 	struct packet : streambuffer {
 
 		int          fd;
@@ -305,8 +328,8 @@ namespace clarcnet {
 		};
 
 		state  state; // current state
-		size_t recvd; // bytes received while in this state
-		size_t req;   // bytes required to exit this state
+		len_t  recvd; // bytes received while in this state
+		len_t  req;   // bytes required to exit this state
 		packet w;     // working packet to receive into
 	};
 
@@ -425,7 +448,8 @@ namespace clarcnet {
 
 			// Header
 			streambuffer header;
-			header.w_size_t(p.size());
+			len_t l(p.size());
+			header.srlz(true, l);
 			code = send_sock(fd, &header.front(), header.size());
 			if (code != SUCCESS) return code;
 
@@ -480,16 +504,16 @@ namespace clarcnet {
 			}
 		}
 
-		ret_code recv_into(int fd, void* buffer, size_t bytes, size_t& recvd) {
-			if (!bytes) return SUCCESS;
+		ret_code recv_into(int fd, void* buffer, len_t bytes, len_t& recvd) {
+			if (!bytes.v) return SUCCESS;
 
 			// Try to retrieve exactly the number required
-			ssize_t len = recv(fd, buffer, bytes, 0);
+			ssize_t len = recv(fd, buffer, bytes.v, 0);
 
 			// Mark the new size since we've received bytes
 			if (len > 0) recvd += len;
 
-			if (len == bytes) {
+			if (len == bytes.v) {
 				return SUCCESS;
 			}
 			else if (len == 0) {
@@ -514,7 +538,7 @@ namespace clarcnet {
 			assert(fd > 0);
 			assert(ci.r.recvd == ci.r.req);
 			ci.r.w.rpos = 0;
-			ci.r.w.resize(ci.r.req);
+			ci.r.w.resize(ci.r.req.v);
 			ci.r.w.fd = fd;
 			ps.emplace_back(std::move(ci.r.w));
 			ci.r = receive_state();
@@ -554,12 +578,13 @@ namespace clarcnet {
 				}
 
 				if (r.state == receive_state::Header) {
-					auto code = recv_into(fd, &r.w[r.recvd], r.req - r.recvd, r.recvd);
+					auto code = recv_into(fd, &r.w[r.recvd.v], r.req - r.recvd, r.recvd);
 					if (code != SUCCESS) return code;
 
 					r.state = receive_state::Payload;
 					r.recvd = 0;
-					r.req   = r.w.r_size_t();
+					
+					r.w.srlz(false, r.req);
 				}
 
 				if (r.state == receive_state::Payload) {
@@ -568,9 +593,9 @@ namespace clarcnet {
 
 						// allocate more space as necessary
 						// but don't resize directly to client request because they could make us allocate tons of memory!
-						if (r.w.size() < r.req) r.w.resize(r.w.size() * 2);
+						if (r.w.size() < r.req.v) r.w.resize(r.w.size() * 2);
 
-						auto code = recv_into(fd, &r.w[r.recvd], std::min(r.w.size() - r.recvd, r.req - r.recvd), r.recvd);
+						auto code = recv_into(fd, &r.w[r.recvd.v], std::min(r.w.size() - r.recvd.v, (r.req - r.recvd).v), r.recvd);
 						if (code != SUCCESS) return code;
 
 						if (r.recvd == r.req) {
