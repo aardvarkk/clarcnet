@@ -650,7 +650,9 @@ namespace clarcnet {
 			chk(err);
 			err = listen(fd, 0);
 			chk(err);
+			
 			freeaddrinfo(res);
+			res = nullptr;
 		}
 
 		ret_code send(int fd, packet&& p) {
@@ -665,11 +667,11 @@ namespace clarcnet {
 		packets process(bool accept_new = true) {
 			flush_backlog();
 			packets ret;
-			sockaddr_storage client;
-			socklen_t sz = sizeof client;
 
 			if (accept_new) {
 				for (;;) {
+					sockaddr_storage client;
+					socklen_t sz = sizeof client;
 					int cfd = accept(fd, (sockaddr*)&client, &sz);
 
 					if (cfd < 0) {
@@ -836,9 +838,10 @@ namespace clarcnet {
 				if (!poll_write()) return ret;
 
 				inet_ntop(res->ai_family, in_addr(res->ai_addr), ci.addr_str, sizeof ci.addr_str);
+				freeaddrinfo(res);
+				res = nullptr;
 
 				connected = true;
-				freeaddrinfo(res);
 				ret.emplace_back(packet(fd, ID_CONNECTION));
 				return ret;
 			}
