@@ -170,7 +170,7 @@ namespace clarcnet {
 		} else {
 			int32_t ival;
 			srlz(w, ival);
-			val = ival / (1<<binplcs);
+			val = static_cast<float>(ival) / (1<<binplcs);
 		}
 	}
 	
