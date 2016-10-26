@@ -655,6 +655,13 @@ namespace clarcnet {
 			res = nullptr;
 		}
 
+		~server() {
+			for (auto it = conns.begin(); it != conns.end(); ++it) {
+				close(it->first);
+			}
+			close(fd);
+		}
+		
 		ret_code send(int fd, packet&& p) {
 			auto it = conns.find(fd);
 			if (it == conns.end()) return FAILURE;
