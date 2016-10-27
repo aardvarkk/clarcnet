@@ -6,14 +6,15 @@
 #include <chrono>
 #include <cstring>
 #include <errno.h>
+#include <fcntl.h>
 #include <iostream>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <queue>
 #include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
-#include <sys/fcntl.h>
 #include <sys/poll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -25,12 +26,11 @@
 
 namespace clarcnet {
 
-	#define thr \
-	throw std::runtime_error(\
-			std::string(__FILE__) + ":" +\
-			std::to_string(__LINE__) + " " +\
-			std::string(strerror(errno)) + " (" +\
-			std::to_string(errno) + ")");
+#define tostr(x) #x
+
+#define thr \
+	 	throw std::runtime_error(\
+	 			std::string(tostr(__FILE__) ":" tostr(__LINE__) " ") + std::string(strerror(errno)));
 
 	#define chk(val) \
 	{\
@@ -623,7 +623,9 @@ namespace clarcnet {
 			hints.ai_flags    = AI_PASSIVE;
 			hints.ai_socktype = SOCK_STREAM;
 
-			if ((err = getaddrinfo(nullptr, std::to_string(port).c_str(), &hints, &res)) != 0) {
+			std::stringstream port_ss;
+			port_ss << port;
+			if ((err = getaddrinfo(nullptr, port_ss.str().c_str(), &hints, &res)) != 0) {
 				throw std::runtime_error(gai_strerror(err));
 			}
 
@@ -792,7 +794,9 @@ namespace clarcnet {
 			hints.ai_socktype = SOCK_STREAM;
 			int err;
 
-			if ((err = getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res)) != 0) {
+			std::stringstream port_ss;
+			port_ss << port;
+			if ((err = getaddrinfo(host.c_str(), port_ss.str().c_str(), &hints, &res)) != 0) {
 				throw std::runtime_error(gai_strerror(err));
 			}
 
@@ -859,7 +863,7 @@ namespace clarcnet {
 				ret.emplace_back(packet(fd, ID_DISCONNECTION));
 				return ret;
 			}
-		
+
 			for (auto const& p : ret) {
 				if (p.mid != ID_HEARTBEAT) continue;
 				if (send(packet(p)) != SUCCESS) {
@@ -872,7 +876,7 @@ namespace clarcnet {
 				ret.emplace_back(packet(fd, ID_TIMEOUT));
 				return ret;
 			}
-			
+
 			remove_heartbeats(ret);
 			return ret;
 		}
