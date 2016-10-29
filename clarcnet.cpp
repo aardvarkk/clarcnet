@@ -4,6 +4,8 @@
 
 namespace clarcnet {
 
+	const ver_t ver_code = 0;
+
 	void* in_addr(sockaddr* sa) {
 		switch (sa->sa_family) {
 			case AF_INET  :
@@ -450,31 +452,46 @@ namespace clarcnet {
 					code = receive(cfd, ci, version);
 					if (!version.empty()) {
 					
+						packet resp(cfd, ID_VERSION);
+						
+						bool match = true;
+						
 						// TOOD: REMOVE
 						// TRANSITIONAL
 						if (version.front().size() == 6) {
-							uint8_t maxver = 0xFF;
 							for (int i = 0; i < 6; ++i) {
+								uint8_t maxver;
 								version.front().srlz(false, maxver);
-								if (maxver != 0xFF) break;
+								if (maxver != 0xFF) {
+									match = false;
+									break;
+								}
 							}
-							if (maxver != 0xFF) {
-								code = FAILURE;
-							} else {
-								send(cfd, packet(version.front()));
-								ci.st = conn_info::VERSIONED;
-							}
+							
+							resp.push_back(0xFF); resp.push_back(0xFF);
+							resp.push_back(0xFF); resp.push_back(0xFF);
+							resp.push_back(0xFF); resp.push_back(0xFF);
 						}
 						// New approach
 						else if (version.front().size() == sizeof(ver_t)) {
 							ver_t ver_cl;
 							version.front().srlz(false, ver_cl);
-							if (ver_cl == ver_code) ci.st = conn_info::VERSIONED;
-							send(cfd, packet(version.front()));
+							match = ver_cl == ver_code;
+							
+							ver_t ver_sv = ver_code;
+							resp.srlz(true, ver_sv);
 						}
 						// Unrecognized
 						else {
+							match = false;
+						}
+						
+						send(cfd, std::move(resp));
+						
+						if (!match) {
 							code = FAILURE;
+						} else {
+							ci.st = conn_info::VERSIONED;
 						}
 					}
 				}
@@ -644,14 +661,17 @@ namespace clarcnet {
 				// Send a 6-byte old-style version
 				// Old server will see we're too new and forward us
 				// New server will detect we're using old approach and allow it
-				uint8_t maxver = 0xFF;
-				version.srlz(true, maxver); version.srlz(true, maxver);
-				version.srlz(true, maxver); version.srlz(true, maxver);
-				version.srlz(true, maxver); version.srlz(true, maxver);
-
-				// New approach...
-//					ver_t ver_cl = ver_code;
-//					version.srlz(true, ver_cl);
+				if (true) {
+					uint8_t maxver = 0xFF;
+					version.srlz(true, maxver); version.srlz(true, maxver);
+					version.srlz(true, maxver); version.srlz(true, maxver);
+					version.srlz(true, maxver); version.srlz(true, maxver);
+				}
+				else {
+					// New approach...
+					ver_t ver_cl = ver_code;
+					version.srlz(true, ver_cl);
+				}
 				
 				code  = send(std::move(version));
 				ci.st = conn_info::VERSIONING;
@@ -669,7 +689,6 @@ namespace clarcnet {
 				
 				// TRANSITIONAL
 				if (version.front().size() == 6) {
-					ci.st = conn_info::VERSIONED;
 					uint8_t maxver;
 					for (auto i = 0; i < 6; ++i) {
 						version.front().srlz(false, maxver);
@@ -684,14 +703,15 @@ namespace clarcnet {
 				{
 					ver_t ver_sv;
 					version.front().srlz(false, ver_sv);
-					if (ver_sv == ver_code) {
-						ci.st = conn_info::VERSIONED;
-					}
+					match = ver_sv == ver_code;
 				}
 				
 				// Something went wrong!
-				if (!match)
+				if (match) {
+					ci.st = conn_info::VERSIONED;
+				} else {
 					ret.push_back(packet(fd, ID_VERSION));
+				}
 			}
 			break;
 	

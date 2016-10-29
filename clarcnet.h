@@ -16,8 +16,8 @@
 
 namespace clarcnet {
 
-	typedef      int32_t ver_t;
-	static const ver_t   ver_code = 0;
+	typedef int32_t ver_t;
+	extern const ver_t ver_code;
 	
 	enum msg_id : uint8_t {
 		ID_UNKNOWN,
@@ -84,6 +84,12 @@ namespace clarcnet {
 	}
 	
 	template <>
+	inline void streambuffer::srlz(bool w, int8_t& val)
+	{
+		srlz(w, reinterpret_cast<uint8_t&>(val));
+	}
+	
+	template <>
 	inline void streambuffer::srlz(bool w, bool& val)
 	{
 		if (w) {
@@ -108,6 +114,12 @@ namespace clarcnet {
 	}
 	
 	template <>
+	inline void streambuffer::srlz(bool w, int16_t& val)
+	{
+		srlz(w, reinterpret_cast<uint16_t&>(val));
+	}
+	
+	template <>
 	inline void streambuffer::srlz(bool w, uint32_t& val)
 	{
 		if (w) {
@@ -118,6 +130,12 @@ namespace clarcnet {
 			val = ntohl(*reinterpret_cast<uint32_t*>(&this->operator[](rpos)));
 			rpos += sizeof val;
 		}
+	}
+	
+	template <>
+	inline void streambuffer::srlz(bool w, int32_t& val)
+	{
+		srlz(w, reinterpret_cast<uint32_t&>(val));
 	}
 	
 	template <>
@@ -139,6 +157,12 @@ namespace clarcnet {
 			#endif
 			rpos += sizeof val;
 		}
+	}
+	
+	template <>
+	inline void streambuffer::srlz(bool w, int64_t& val)
+	{
+		srlz(w, reinterpret_cast<uint64_t&>(val));
 	}
 	
 	template <>
