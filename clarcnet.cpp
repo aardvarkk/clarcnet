@@ -23,11 +23,12 @@ namespace clarcnet {
 		}
 	}
 	
-	#define tostr(x) #x
+	#define xtostr(x) tostr(x)
+	#define tostr(x)  #x
 
 	#define thr \
 	 	throw runtime_error(\
-	 			string(tostr(__FILE__) ":" tostr(__LINE__) " ") + string(strerror(errno)));
+	 			string(__FILE__ ":" xtostr(__LINE__) " ") + string(strerror(errno)));
 
 	#define chk(val) \
 	{\
