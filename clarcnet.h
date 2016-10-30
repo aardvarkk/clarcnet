@@ -17,9 +17,7 @@
 
 namespace clarcnet {
 
-	typedef      int32_t     ver_t;
-	extern const ver_t       ver_code;
-	extern const EVP_CIPHER* cipher_t;
+	typedef int32_t ver_t;
 	
 	enum msg_id : uint8_t {
 		ID_UNKNOWN,
@@ -411,8 +409,9 @@ namespace clarcnet {
 		ms       heartbeat_period;
 		ms       timeout;
 		
-		EVP_PKEY* public_key;
-		EVP_PKEY* private_key;
+		const EVP_CIPHER* cipher;
+		EVP_PKEY*         public_key;
+		EVP_PKEY*         private_key;
 	};
 
 	class client : public peer

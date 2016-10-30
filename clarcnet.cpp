@@ -375,6 +375,7 @@ namespace clarcnet {
 	{
 		public_key  = load_key(true,  pubkeyfile);
 		private_key = load_key(false, prvkeyfile);
+		cipher      = (public_key && private_key) ? cipher_t : EVP_enc_null();
 		
 		int err;
 		addrinfo hints    = {}, *res;
@@ -508,7 +509,7 @@ namespace clarcnet {
 		
 		int keys = EVP_OpenInit(
 			ci.ctx,
-			cipher_t,
+			cipher,
 			session_key_enc.data(),
 			static_cast<int>(session_key_enc.size()),
 			iv.data(),
@@ -784,29 +785,37 @@ namespace clarcnet {
 		
 		if (in.empty() || in.front().mid != ID_CIPHER) return WAITING;
 		
-		vector<uint8_t> pk;
-		in.front().srlz(false, pk);
+		vector<uint8_t> pubkey;
+		in.front().srlz(false, pubkey);
 		in.erase(in.begin());
 		
-		const uint8_t* data = pk.data();
-		auto pkey = d2i_PUBKEY(nullptr, &data, pk.size());
+		bool success = true;
+		vector<uint8_t> session_key_enc, iv;
 		
-		vector<uint8_t> session_key_enc(EVP_PKEY_size(pkey));
-		auto session_key_enc_data = session_key_enc.data();
-		int  session_key_enc_lens[1] = { 0 };
-		vector<uint8_t> iv(EVP_CIPHER_iv_length(cipher_t));
+		if (!pubkey.empty()) {
+			const uint8_t* data = pubkey.data();
+			auto pkey = d2i_PUBKEY(nullptr, &data, pubkey.size());
+			
+			session_key_enc.resize(EVP_PKEY_size(pkey));
+			iv.resize(EVP_CIPHER_iv_length(cipher_t));
+
+			auto session_key_enc_data = session_key_enc.data();
+			int  session_key_enc_lens[1] = { 0 };
+			
+			int npubk = EVP_SealInit(
+				ci.ctx,
+				cipher_t,
+				&session_key_enc_data,
+				session_key_enc_lens,
+				iv.data(),
+				&pkey,
+				1
+			);
+			
+			success = npubk == 1;
+		}
 		
-		int npubk = EVP_SealInit(
-			ci.ctx,
-			cipher_t,
-			&session_key_enc_data,
-			session_key_enc_lens,
-			iv.data(),
-			&pkey,
-			1
-		);
-		
-		if (npubk == 1) {
+		if (success) {
 			ci.st = conn_info::SECURED;
 			
 			packet session(fd, ID_CIPHER);
