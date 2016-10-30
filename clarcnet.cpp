@@ -1,10 +1,14 @@
 #include "clarcnet.h"
 
 #include <cassert>
+#include <easylogging++.h>
+
+using namespace std;
 
 namespace clarcnet {
 
-	const ver_t ver_code = 0;
+	const ver_t       ver_code = 0;
+	const EVP_CIPHER* cipher_t = EVP_aes_128_ctr();
 
 	void* in_addr(sockaddr* sa) {
 		switch (sa->sa_family) {
@@ -22,8 +26,8 @@ namespace clarcnet {
 	#define tostr(x) #x
 
 	#define thr \
-	 	throw std::runtime_error(\
-	 			std::string(tostr(__FILE__) ":" tostr(__LINE__) " ") + std::string(strerror(errno)));
+	 	throw runtime_error(\
+	 			string(tostr(__FILE__) ":" tostr(__LINE__) " ") + string(strerror(errno)));
 
 	#define chk(val) \
 	{\
@@ -68,7 +72,7 @@ namespace clarcnet {
 			return 8;
 		}
 		else {
-			throw std::runtime_error("Invalid intro byte!");
+			throw runtime_error("Invalid intro byte!");
 		}
 	}
 
@@ -84,7 +88,13 @@ namespace clarcnet {
 		last_packet_recv(clk::now()),
 		st(UNKNOWN)
 	{
-		std::fill(addr_str, addr_str + sizeof addr_str, 0);
+		ctx = EVP_CIPHER_CTX_new();
+		fill(addr_str, addr_str + sizeof addr_str, 0);
+	}
+	
+	conn_info::~conn_info()
+	{
+		EVP_CIPHER_CTX_free(ctx);
 	}
 
 	peer::peer() :
@@ -92,7 +102,7 @@ namespace clarcnet {
 		lag_min(ms(0)),
 		lag_max(ms(0))
 	{
-		std::random_device rdev;
+		random_device rdev;
 		rng.seed(rdev());
 	}
 
@@ -107,7 +117,7 @@ namespace clarcnet {
 	void peer::remove_heartbeats(packets& ps)
 	{
 		// Don't pass along heartbeats -- they're internal
-		ps.erase(std::remove_if(
+		ps.erase(remove_if(
 								 ps.begin(),
 								 ps.end(),
 		[](packet const& p) {
@@ -221,12 +231,12 @@ namespace clarcnet {
 		if (!lag_max.count()) {
 			return send_packet(fd, p);
 		} else {
-			std::uniform_int_distribution<> dist_lag(
+			uniform_int_distribution<> dist_lag(
 					static_cast<int>(lag_min.count()),
 					static_cast<int>(lag_max.count())
 			);
 			ms lag(dist_lag(rng));
-			delayed.emplace_back(delayed_send(fd, std::move(p), clk::now() + lag));
+			delayed.emplace_back(delayed_send(fd, move(p), clk::now() + lag));
 			return SUCCESS;
 		}
 	}
@@ -269,14 +279,13 @@ namespace clarcnet {
 		ci.r.w.rpos = 0;
 		ci.r.w.resize(ci.r.req.v);
 		ci.r.w.fd = fd;
-		ps.emplace_back(std::move(ci.r.w));
+		ps.emplace_back(move(ci.r.w));
 		ci.r = receive_state();
 		ci.last_packet_recv = clk::now();
 	}
 
 	ret_code peer::receive(int fd, conn_info &ci, packets &ps)
 	{
-
 		receive_state& r = ci.r;
 
 		// Keep going while we are receiving packets!
@@ -324,7 +333,7 @@ namespace clarcnet {
 					// but don't resize directly to client request because they could make us allocate tons of memory!
 					if (r.w.size() < r.req.v) r.w.resize(r.w.size() * 2);
 
-					auto code = recv_into(fd, &r.w[r.recvd.v], std::min(r.w.size() - r.recvd.v, (r.req - r.recvd).v), r.recvd);
+					auto code = recv_into(fd, &r.w[r.recvd.v], min(r.w.size() - r.recvd.v, (r.req - r.recvd).v), r.recvd);
 					if (code != SUCCESS) return code;
 
 					if (r.recvd == r.req) {
@@ -336,20 +345,46 @@ namespace clarcnet {
 		}
 	}
 
-	server::server(uint16_t port, ms heartbeat_period, ms timeout)
+	EVP_PKEY* server::load_key(bool is_public, std::string const& filename)
 	{
-		this->heartbeat_period = heartbeat_period;
-		this->timeout = timeout;
+		EVP_PKEY* key = nullptr;
+		
+		if (!filename.empty()) {
+			auto fp = fopen(filename.c_str(), "r");
+			if (fp) {
+				key = is_public ?
+					PEM_read_PUBKEY(fp, nullptr, nullptr, nullptr) :
+					PEM_read_PrivateKey(fp, nullptr, nullptr, nullptr);
+			}
+			fclose(fp);
+		}
+		
+		return key;
+	}
+	
+	server::server(
+		uint16_t port,
+		string const& pubkeyfile,
+		string const& prvkeyfile,
+		ms heartbeat_period,
+		ms timeout) :
+		heartbeat_period(heartbeat_period),
+		timeout(timeout)
+	
+	{
+		public_key  = load_key(true,  pubkeyfile);
+		private_key = load_key(false, prvkeyfile);
+		
 		int err;
 		addrinfo hints    = {}, *res;
 		hints.ai_family   = AF_INET6;
 		hints.ai_flags    = AI_PASSIVE;
 		hints.ai_socktype = SOCK_STREAM;
 
-		std::stringstream port_ss;
+		stringstream port_ss;
 		port_ss << port;
 		if ((err = getaddrinfo(nullptr, port_ss.str().c_str(), &hints, &res)) != 0) {
-			throw std::runtime_error(gai_strerror(err));
+			throw runtime_error(gai_strerror(err));
 		}
 
 		fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
@@ -366,12 +401,12 @@ namespace clarcnet {
 		val = 1;
 		err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 		chk(err);
-#ifdef SO_NOSIGPIPE
+		#ifdef SO_NOSIGPIPE
 		val = 1;
 		err = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
 		chk(err);
-#endif
-		err = bind(fd, res->ai_addr, res->ai_addrlen);
+		#endif
+		err = ::bind(fd, res->ai_addr, res->ai_addrlen);
 		chk(err);
 		err = listen(fd, 0);
 		chk(err);
@@ -393,152 +428,193 @@ namespace clarcnet {
 		auto it = conns.find(fd);
 		if (it == conns.end()) return FAILURE;
 
-		auto code = peer::send(fd, std::move(p));
+		auto code = peer::send(fd, move(p));
 		return code;
 	}
 
+	ret_code server::process_initiated(int cfd, conn_info& ci, packets& in, packets& out)
+	{
+		LOG(DEBUG) << "process_initiated " << cfd;
+		
+		if (in.empty() || in.front().mid != ID_VERSION) return WAITING;
+		
+		packet resp(cfd, ID_VERSION);
+		bool match = true;
+		
+		// TRANSITIONAL
+		// TOOD: REMOVE
+		if (in.front().size() == 6) {
+			for (int i = 0; i < 6; ++i) {
+				uint8_t maxver;
+				in.front().srlz(false, maxver);
+				if (maxver != 0xFF) {
+					match = false;
+					break;
+				}
+			}
+			
+			resp.push_back(0xFF); resp.push_back(0xFF);
+			resp.push_back(0xFF); resp.push_back(0xFF);
+			resp.push_back(0xFF); resp.push_back(0xFF);
+		}
+		// New approach
+		else if (in.front().size() == sizeof(ver_t)) {
+			ver_t ver_cl;
+			in.front().srlz(false, ver_cl);
+			match = ver_cl == ver_code;
+			
+			ver_t ver_sv = ver_code;
+			resp.srlz(true, ver_sv);
+		}
+		// Unrecognized
+		else {
+			match = false;
+		}
+		
+		in.erase(in.begin());
+		send(cfd, move(resp));
+		
+		if (!match) {
+			return FAILURE;
+		} else {
+			ci.st = conn_info::VERSIONED;
+			
+			// Send our public key for client to use (could be empty)
+			packet pk(cfd, ID_CIPHER);
+
+			uint8_t* serialized = nullptr;
+			int sz = i2d_PUBKEY(public_key, &serialized);
+			
+			vector<uint8_t> pubkey;
+			pubkey.insert(pubkey.begin(), serialized, serialized + sz);
+			
+			pk.srlz(true, pubkey);
+			
+			return send(cfd, move(pk));
+		}
+	}
+	
+	ret_code server::process_versioned(int cfd, conn_info& ci, packets& in, packets& out)
+	{
+		LOG(DEBUG) << "process_versioned " << cfd;
+		
+		if (in.empty() || in.front().mid != ID_CIPHER) return WAITING;
+		
+		vector<uint8_t> session_key_enc;
+		vector<uint8_t> iv;
+		in.front().srlz(false, session_key_enc);
+		in.front().srlz(false, iv);
+		
+		int keys = EVP_OpenInit(
+			ci.ctx,
+			cipher_t,
+			session_key_enc.data(),
+			static_cast<int>(session_key_enc.size()),
+			iv.data(),
+			private_key
+			);
+		
+		if (keys == 1) {
+			ci.st = conn_info::SECURED;
+			return SUCCESS;
+		} else {
+			return FAILURE;
+		}
+	}
+	
+	ret_code server::process_secured(int cfd, conn_info& ci, packets& in, packets& out)
+	{
+		LOG(DEBUG) << "process_secured " << cfd;
+		
+		ci.st = conn_info::CONNECTED;
+		out.emplace_back(packet(cfd, ID_CONNECTION));
+		return SUCCESS;
+	}
+	
+	void server::process_accept()
+	{
+		for (;;) {
+			sockaddr_storage client;
+			socklen_t sz = sizeof client;
+			int cfd = accept(fd, (sockaddr*)&client, &sz);
+			
+			if (cfd < 0) {
+				if (errno == EAGAIN || errno == EWOULDBLOCK) {
+					break;
+				} else {
+					thr;
+				}
+			} else {
+				assert(!conns.count(cfd));
+				
+				conn_info& ci = conns[cfd];
+				ci.st = conn_info::INITIATED;
+				
+				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), conns[cfd].addr_str, sizeof conns[cfd].addr_str);
+				int err = fcntl(cfd, F_SETFL, O_NONBLOCK);
+				chk(err);
+				
+				#ifdef SO_NOSIGPIPE
+				socklen_t val = 1;
+				err = setsockopt(cfd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
+				chk(err);
+				#endif
+			}
+		}
+	}
+	
 	packets server::process(bool accept_new)
 	{
 		tp now = clk::now();
 		
 		flush_backlog();
 
-		packets ret;
+		if (accept_new)
+			process_accept();
+
+		packets out;
 		
-		if (accept_new) {
-			for (;;) {
-				sockaddr_storage client;
-				socklen_t sz = sizeof client;
-				int cfd = accept(fd, (sockaddr*)&client, &sz);
-
-				if (cfd < 0) {
-					if (errno == EAGAIN || errno == EWOULDBLOCK) {
-						break;
-					} else {
-						thr;
-					}
-				} else {
-					assert(!conns.count(cfd));
-					
-					conn_info ci;
-					ci.st = conn_info::INITIATED;
-					conns.insert(std::make_pair(cfd, ci));
-
-					inet_ntop(client.ss_family, in_addr((sockaddr*)&client), conns[cfd].addr_str, sizeof conns[cfd].addr_str);
-					int err = fcntl(cfd, F_SETFL, O_NONBLOCK);
-					chk(err);
-					
-					#ifdef SO_NOSIGPIPE
-					socklen_t val = 1;
-					err = setsockopt(cfd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
-					chk(err);
-					#endif
-				}
-			}
-		}
-
 		for (auto fd_to_ci = conns.begin(); fd_to_ci != conns.end();) {
 			
 			int        cfd  = fd_to_ci->first;
 			conn_info& ci   = fd_to_ci->second;
 			ret_code   code = SUCCESS;
 			
-			// server
-			switch (ci.st)
-			{
-				case conn_info::INITIATED:
-				{
-					packets version;
-					code = receive(cfd, ci, version);
-					if (!version.empty()) {
-					
-						packet resp(cfd, ID_VERSION);
-						
-						bool match = true;
-						
-						// TOOD: REMOVE
-						// TRANSITIONAL
-						if (version.front().size() == 6) {
-							for (int i = 0; i < 6; ++i) {
-								uint8_t maxver;
-								version.front().srlz(false, maxver);
-								if (maxver != 0xFF) {
-									match = false;
-									break;
-								}
-							}
-							
-							resp.push_back(0xFF); resp.push_back(0xFF);
-							resp.push_back(0xFF); resp.push_back(0xFF);
-							resp.push_back(0xFF); resp.push_back(0xFF);
-						}
-						// New approach
-						else if (version.front().size() == sizeof(ver_t)) {
-							ver_t ver_cl;
-							version.front().srlz(false, ver_cl);
-							match = ver_cl == ver_code;
-							
-							ver_t ver_sv = ver_code;
-							resp.srlz(true, ver_sv);
-						}
-						// Unrecognized
-						else {
-							match = false;
-						}
-						
-						send(cfd, std::move(resp));
-						
-						if (!match) {
-							code = FAILURE;
-						} else {
-							ci.st = conn_info::VERSIONED;
-						}
-					}
-				}
-				break;
-				
-				case conn_info::VERSIONED:
-				{
-					// TODO: encryption
-					ci.st = conn_info::SECURED;
-				}
-				break;
-				
-				case conn_info::SECURED:
-				{
-					ci.st = conn_info::CONNECTED;
-					ret.emplace_back(packet(cfd, ID_CONNECTION));
-				}
-				break;
-				
-				case conn_info::CONNECTED:
-				{
-					code = receive(cfd, ci, ret);
-				}
-				break;
-				
-				// Invalid connection state
-				default:
-				{
-					code = FAILURE;
-				}
-				break;
+			packets in;
+			
+			code = receive(cfd, ci, ci.st == conn_info::CONNECTED ? out : in);
+			
+			if (ci.st == conn_info::INITIATED) {
+				code = process_initiated(cfd, ci, in, out);
 			}
 			
+			if (code != FAILURE && ci.st == conn_info::VERSIONED) {
+				code = process_versioned(cfd, ci, in, out);
+			}
+			
+			if (code != FAILURE && ci.st == conn_info::SECURED) {
+				code = process_secured(cfd, ci, in, out);
+			}
+
+			if (code != FAILURE && ci.st == conn_info::CONNECTED) {
+				LOG(DEBUG) << "process_connected";
+				out.insert(out.end(), in.begin(), in.end());
+			}
+
 			if (code == FAILURE) {
-				if (ci.st == conn_info::CONNECTED) ret.emplace_back(packet(cfd, ID_DISCONNECTION));
+				if (ci.st == conn_info::CONNECTED) out.emplace_back(packet(cfd, ID_DISCONNECTION));
 				fd_to_ci = disconnect(fd_to_ci);
 				continue;
 			} else {
 				if (now - ci.last_packet_recv > timeout) {
-					if (ci.st == conn_info::CONNECTED) ret.emplace_back(packet(cfd, ID_TIMEOUT));
+					if (ci.st == conn_info::CONNECTED) out.emplace_back(packet(cfd, ID_TIMEOUT));
 					fd_to_ci = disconnect(fd_to_ci);
 					continue;
 				}
 
 				if (now - max(ci.last_heartbeat_sent, ci.last_packet_recv) >= heartbeat_period) {
 					if (send(cfd, packet(cfd, ID_HEARTBEAT)) != SUCCESS) {
-						if (ci.st == conn_info::CONNECTED) ret.emplace_back(packet(cfd, ID_DISCONNECTION));
+						if (ci.st == conn_info::CONNECTED) out.emplace_back(packet(cfd, ID_DISCONNECTION));
 						fd_to_ci = disconnect(fd_to_ci);
 						continue;
 					}
@@ -549,11 +625,12 @@ namespace clarcnet {
 			++fd_to_ci;
 		}
 
-		remove_heartbeats(ret);
-		return ret;
+		remove_heartbeats(out);
+		
+		return out;
 	}
 
-	std::string server::address(int cfd)
+	string server::address(int cfd)
 	{
 		auto fd_to_ci = conns.find(cfd);
 		return fd_to_ci == conns.end() ? "" : fd_to_ci->second.addr_str;
@@ -579,7 +656,7 @@ namespace clarcnet {
 		return conns.erase(conn_it);
 	}
 
-	client::client(std::string const& host, uint16_t port, ms timeout) :
+	client::client(string const& host, uint16_t port, ms timeout) :
 		timeout(timeout)
 	{
 		conn_start = clk::now();
@@ -590,10 +667,10 @@ namespace clarcnet {
 		hints.ai_socktype = SOCK_STREAM;
 		int err;
 
-		std::stringstream port_ss;
+		stringstream port_ss;
 		port_ss << port;
 		if ((err = getaddrinfo(host.c_str(), port_ss.str().c_str(), &hints, &res)) != 0) {
-			throw std::runtime_error(gai_strerror(err));
+			throw runtime_error(gai_strerror(err));
 		}
 
 		fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
@@ -625,141 +702,190 @@ namespace clarcnet {
 
 	ret_code client::send(packet&& p)
 	{
-		return peer::send(this->fd, std::move(p));
+		return peer::send(this->fd, move(p));
 	}
 
+	ret_code client::process_disconnected()
+	{
+		LOG(DEBUG) << "process_disconnected";
+		
+		if (!poll_write()) return WAITING;
+		
+		ci.st = conn_info::INITIATED;
+		
+		inet_ntop(res->ai_family, in_addr(res->ai_addr), ci.addr_str, sizeof ci.addr_str);
+		freeaddrinfo(res);
+		res = nullptr;
+		
+		packet version(fd, ID_VERSION);
+		
+		// TRANSITIONAL
+		// Send a 6-byte old-style version
+		// Old server will see we're too new and forward us
+		// New server will detect we're using old approach and allow it
+		if (true) {
+			uint8_t maxver = 0xFF;
+			version.srlz(true, maxver); version.srlz(true, maxver);
+			version.srlz(true, maxver); version.srlz(true, maxver);
+			version.srlz(true, maxver); version.srlz(true, maxver);
+		}
+		else {
+			// New approach...
+			ver_t ver_cl = ver_code;
+			version.srlz(true, ver_cl);
+		}
+		
+		return send(move(version));
+	}
+	
+	ret_code client::process_initiated(packets& in, packets& out)
+	{
+		LOG(DEBUG) << "process_initiated";
+		
+		if (in.empty() || in.front().mid != ID_VERSION) return WAITING;
+
+		bool match = true;
+		
+		// TRANSITIONAL
+		// TODO: REMOVE
+		if (in.front().size() == 6) {
+			uint8_t maxver;
+			for (auto i = 0; i < 6; ++i) {
+				in.front().srlz(false, maxver);
+				if (maxver != 0xFF) {
+					match = false;
+					break;
+				}
+			}
+		}
+		// New approach
+		else if (in.front().size() == sizeof(ver_t))
+		{
+			ver_t ver_sv;
+			in.front().srlz(false, ver_sv);
+			match = ver_sv == ver_code;
+		}
+		
+		in.erase(in.begin());
+		
+		if (match) {
+			ci.st = conn_info::VERSIONED;
+			return SUCCESS;
+		} else {
+			out.push_back(packet(fd, ID_VERSION));
+			return FAILURE;
+		}
+	}
+	
+	ret_code client::process_versioned(packets& in, packets& out)
+	{
+		LOG(DEBUG) << "process_versioned";
+		
+		if (in.empty() || in.front().mid != ID_CIPHER) return WAITING;
+		
+		vector<uint8_t> pk;
+		in.front().srlz(false, pk);
+		in.erase(in.begin());
+		
+		const uint8_t* data = pk.data();
+		auto pkey = d2i_PUBKEY(nullptr, &data, pk.size());
+		
+		vector<uint8_t> session_key_enc(EVP_PKEY_size(pkey));
+		auto session_key_enc_data = session_key_enc.data();
+		int  session_key_enc_lens[1] = { 0 };
+		vector<uint8_t> iv(EVP_CIPHER_iv_length(cipher_t));
+		
+		int npubk = EVP_SealInit(
+			ci.ctx,
+			cipher_t,
+			&session_key_enc_data,
+			session_key_enc_lens,
+			iv.data(),
+			&pkey,
+			1
+		);
+		
+		if (npubk == 1) {
+			ci.st = conn_info::SECURED;
+			
+			packet session(fd, ID_CIPHER);
+			session.srlz(true, session_key_enc);
+			session.srlz(true, iv);
+			
+			return send(move(session));
+		} else {
+			return FAILURE;
+		}
+	}
+	
+	ret_code client::process_secured(packets& in, packets& out)
+	{
+		LOG(DEBUG) << "process_secured";
+		
+		ci.st = conn_info::CONNECTED;
+		out.push_back(packet(fd, ID_CONNECTION));
+		
+		return SUCCESS;
+	}
+	
 	packets client::process()
 	{
-		packets  ret;
+		packets  in, out;
 		ret_code code = SUCCESS;
 
 		flush_backlog();
 		
-		if (fd < 0) return ret;
+		if (fd < 0) return out;
+		
+		code = receive(fd, ci, ci.st == conn_info::CONNECTED ? out : in);
+		
+		if (ci.st == conn_info::DISCONNECTED) {
+			code = process_disconnected();
+		}
+		
+		if (ci.st == conn_info::INITIATED) {
+			code = process_initiated(in, out);
+		}
+		
+		if (code != FAILURE && ci.st == conn_info::VERSIONED) {
+			code = process_versioned(in, out);
+		}
+		
+		if (code != FAILURE && ci.st == conn_info::SECURED) {
+			code = process_secured(in, out);
+		}
 
-		// client
-		switch (ci.st) {
-			case conn_info::DISCONNECTED:
-			{
-				if (!poll_write()) break;
-				
-				ci.st = conn_info::INITIATED;
-				
-				inet_ntop(res->ai_family, in_addr(res->ai_addr), ci.addr_str, sizeof ci.addr_str);
-				freeaddrinfo(res);
-				res = nullptr;
-				
-				packet version(fd, ID_VERSION);
-				
-				// TRANSITIONAL
-				// Send a 6-byte old-style version
-				// Old server will see we're too new and forward us
-				// New server will detect we're using old approach and allow it
-				if (true) {
-					uint8_t maxver = 0xFF;
-					version.srlz(true, maxver); version.srlz(true, maxver);
-					version.srlz(true, maxver); version.srlz(true, maxver);
-					version.srlz(true, maxver); version.srlz(true, maxver);
-				}
-				else {
-					// New approach...
-					ver_t ver_cl = ver_code;
-					version.srlz(true, ver_cl);
-				}
-				
-				code  = send(std::move(version));
-			}
-			break;
-			
-			case conn_info::INITIATED:
-			{
-				packets version;
-				code = receive(fd, ci, version);
-
-				if (version.empty()) break;
-
-				bool match = true;
-				
-				// TRANSITIONAL
-				if (version.front().size() == 6) {
-					uint8_t maxver;
-					for (auto i = 0; i < 6; ++i) {
-						version.front().srlz(false, maxver);
-						if (maxver != 0xFF) {
-							match = false;
-							break;
-						}
-					}
-				}
-				// New approach
-				else if (version.front().size() == sizeof(ver_t))
-				{
-					ver_t ver_sv;
-					version.front().srlz(false, ver_sv);
-					match = ver_sv == ver_code;
-				}
-				
-				// Something went wrong!
-				if (match) {
-					ci.st = conn_info::VERSIONED;
-				} else {
-					ret.push_back(packet(fd, ID_VERSION));
-				}
-			}
-			break;
-	
-			case conn_info::VERSIONED:
-			{
-				ci.st = conn_info::SECURED;
-			}
-			break;
-			
-			case conn_info::SECURED:
-			{
-				ci.st = conn_info::CONNECTED;
-				ret.push_back(packet(fd, ID_CONNECTION));
-			}
-			break;
-			
-			case conn_info::CONNECTED:
-			{
-				code = receive(fd, ci, ret);
-			}
-			break;
-			
-			// Invalid connection state
-			default:
-			{
-				code = FAILURE;
-			}
-			break;
+		if (code != FAILURE && ci.st == conn_info::CONNECTED) {
+			LOG(DEBUG) << "process_connected";
+			out.insert(out.begin(), in.begin(), in.end());
 		}
 		
 		if (code == FAILURE) {
 			ci.st = conn_info::DISCONNECTED;
-			ret.emplace_back(packet(fd, ID_DISCONNECTION));
-			return ret;
+			out.emplace_back(packet(fd, ID_DISCONNECTION));
+			return out;
 		}
 
-		for (auto const& p : ret) {
+		for (auto const& p : out) {
 			if (p.mid != ID_HEARTBEAT) continue;
 			if (send(packet(p)) != SUCCESS) {
 				ci.st = conn_info::DISCONNECTED;
-				ret.emplace_back(packet(fd, ID_DISCONNECTION));
-				return ret;
+				out.emplace_back(packet(fd, ID_DISCONNECTION));
+				return out;
 			}
 		}
 
 		if (timeout != ms(0) && clk::now() - ci.last_packet_recv > timeout) {
-			ret.emplace_back(packet(fd, ID_TIMEOUT));
-			return ret;
+			out.emplace_back(packet(fd, ID_TIMEOUT));
+			return out;
 		}
 
-		remove_heartbeats(ret);
-		return ret;
+		remove_heartbeats(out);
+		
+		return out;
 	}
 
-	std::string client::address()
+	string client::address()
 	{
 		return ci.addr_str;
 	}
