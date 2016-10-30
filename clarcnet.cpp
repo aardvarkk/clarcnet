@@ -583,6 +583,7 @@ namespace clarcnet {
 		timeout(timeout)
 	{
 		conn_start = clk::now();
+		ci.st = conn_info::DISCONNECTED;
 
 		addrinfo hints    = {};
 		hints.ai_family   = AF_UNSPEC;
@@ -613,8 +614,6 @@ namespace clarcnet {
 		if (err < 0 && errno != EINPROGRESS) {
 			thr;
 		}
-
-		ci.st = conn_info::INITIATING;
 	}
 
 	void client::disconnect()
@@ -640,21 +639,16 @@ namespace clarcnet {
 
 		// client
 		switch (ci.st) {
-			case conn_info::INITIATING:
+			case conn_info::DISCONNECTED:
 			{
 				if (!poll_write()) break;
+				
+				ci.st = conn_info::INITIATED;
 				
 				inet_ntop(res->ai_family, in_addr(res->ai_addr), ci.addr_str, sizeof ci.addr_str);
 				freeaddrinfo(res);
 				res = nullptr;
 				
-				code  = SUCCESS;
-				ci.st = conn_info::INITIATED;
-			}
-			break;
-			
-			case conn_info::INITIATED:
-			{
 				packet version(fd, ID_VERSION);
 				
 				// TRANSITIONAL
@@ -674,11 +668,10 @@ namespace clarcnet {
 				}
 				
 				code  = send(std::move(version));
-				ci.st = conn_info::VERSIONING;
 			}
 			break;
 			
-			case conn_info::VERSIONING:
+			case conn_info::INITIATED:
 			{
 				packets version;
 				code = receive(fd, ci, version);
@@ -716,12 +709,6 @@ namespace clarcnet {
 			break;
 	
 			case conn_info::VERSIONED:
-			{
-				ci.st = conn_info::SECURING;
-			}
-			break;
-			
-			case conn_info::SECURING:
 			{
 				ci.st = conn_info::SECURED;
 			}

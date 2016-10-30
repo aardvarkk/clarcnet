@@ -302,11 +302,8 @@ namespace clarcnet {
 	
 		enum state {
 			UNKNOWN,
-			INITIATING,
 			INITIATED,
-			VERSIONING,
 			VERSIONED,
-			SECURING,
 			SECURED,
 			CONNECTED,
 			DISCONNECTED
