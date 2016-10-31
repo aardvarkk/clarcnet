@@ -186,6 +186,11 @@ namespace clarcnet {
 				else if (errno == ECONNRESET || errno == EPIPE) {
 					return FAILURE;
 				}
+				// TODO: Investigate
+				// Seem to get this for no good reason when starting many connections quickly
+				else if (errno == EPROTOTYPE) {
+					return FAILURE;
+				}
 				else {
 					thr;
 				}
