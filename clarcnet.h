@@ -336,7 +336,9 @@ namespace clarcnet {
 		tp            last_heartbeat_sent; // know when to send more heartbeats
 		state         st;                  // state of the connection
 		
-		EVP_CIPHER_CTX* ctx; // cipher context
+		EVP_CIPHER_CTX* ctx_enc; // cipher context for encryption
+		EVP_CIPHER_CTX* ctx_dec; // cipher context for decryption
+		
 		std::vector<uint8_t> session_key, iv; // session key and initialization vector
 	};
 	
@@ -365,13 +367,18 @@ namespace clarcnet {
 
 		typedef std::unordered_map<int, conn_info> conn_map;
 
-		bool cipher(
+		bool cipher_init(
 			bool encrypt,
+			EVP_CIPHER_CTX* ctx,
+			uint8_t const* key,
+			uint8_t const* iv
+		);
+		
+		bool cipher(
 			EVP_CIPHER_CTX* ctx,
 			conn_info& ci,
 			std::vector<uint8_t> const& in,
-			std::vector<uint8_t>& out,
-			bool init = true
+			std::vector<uint8_t>& out
 			);
 		
 		conn_map::iterator disconnect(conn_map::iterator conn_it);

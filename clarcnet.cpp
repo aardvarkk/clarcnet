@@ -92,13 +92,15 @@ namespace clarcnet {
 		last_packet_recv(clk::now()),
 		st(UNKNOWN)
 	{
-		ctx = EVP_CIPHER_CTX_new();
+		ctx_enc = EVP_CIPHER_CTX_new();
+		ctx_dec = EVP_CIPHER_CTX_new();
 		fill(addr_str, addr_str + sizeof(addr_str), 0);
 	}
 	
 	conn_info::~conn_info()
 	{
-		EVP_CIPHER_CTX_free(ctx);
+		EVP_CIPHER_CTX_free(ctx_enc);
+		EVP_CIPHER_CTX_free(ctx_dec);
 	}
 
 	peer::peer() :
@@ -204,7 +206,7 @@ namespace clarcnet {
 		// Encrypt!
 		if (p.mid >= ID_USER) {
 			vector<uint8_t> p_enc;
-			cipher(true, ci.ctx, ci, p, p_enc);
+			cipher(ci.ctx_enc, ci, p, p_enc);
 			p.vector::operator=(p_enc);
 		}
 		
@@ -298,7 +300,7 @@ namespace clarcnet {
 		// Decrypt!
 		if (ci.r.w.mid >= ID_USER) {
 			vector<uint8_t> p_dec;
-			cipher(false, ci.ctx, ci, ci.r.w, p_dec);
+			cipher(ci.ctx_dec, ci, ci.r.w, p_dec);
 			ci.r.w.vector::operator=(p_dec);
 		}
 		
@@ -545,10 +547,8 @@ namespace clarcnet {
 		in.front().srlz(false, temp_key);
 		in.front().srlz(false, temp_iv);
 		
-		auto ctx = EVP_CIPHER_CTX_new();
-		
 		int keys = EVP_OpenInit(
-			ctx,
+			ci.ctx_dec,
 			cphr,
 			temp_key.data(),
 			static_cast<int>(temp_key.size()),
@@ -556,19 +556,18 @@ namespace clarcnet {
 			private_key
 			);
 
-		if (keys != 1) {
-			EVP_CIPHER_CTX_free(ctx);
-			return FAILURE;
-		}
+		if (keys != 1) return FAILURE;
 		
 		vector<uint8_t> session_key_enc;
 		in.front().srlz(false, session_key_enc);
 		in.front().srlz(false, ci.iv);
 		
-		cipher(false, ctx, ci, session_key_enc, ci.session_key, false);
+		cipher(ci.ctx_dec, ci, session_key_enc, ci.session_key);
 
-		EVP_CIPHER_CTX_free(ctx);
-		
+		// Initialize our session ciphers
+		cipher_init(true,  ci.ctx_enc, ci.session_key.data(), ci.iv.data());
+		cipher_init(false, ci.ctx_dec, ci.session_key.data(), ci.iv.data());
+
 		ci.st = conn_info::CONNECTED;
 		out.emplace_back(packet(cfd, ID_CONNECTION));
 		
@@ -811,56 +810,50 @@ namespace clarcnet {
 		}
 	}
 	
-	bool peer::cipher(
+	bool peer::cipher_init(
 		bool encrypt,
+		EVP_CIPHER_CTX* ctx,
+		uint8_t const* key,
+		uint8_t const* iv
+	)
+	{
+		return EVP_CipherInit_ex(
+			ctx,
+			cphr,
+			nullptr,
+			key,
+			iv,
+			encrypt) == 1;
+	}
+	
+	bool peer::cipher(
 		EVP_CIPHER_CTX* ctx,
 		conn_info& ci,
 		vector<uint8_t> const& in,
-		vector<uint8_t>& out,
-		bool init
+		vector<uint8_t>& out
 	)
 	{
-		if (init) {
-			if (EVP_CipherInit_ex(
-				ctx,
-				cphr,
-				nullptr,
-				ci.session_key.data(),
-				ci.iv.data(),
-				encrypt) != 1) return false;
-		}
+		assert(EVP_CIPHER_CTX_block_size(ctx) == 1);
 		
 		int rem      = static_cast<int>(in.size());
-		int blk      = EVP_CIPHER_CTX_block_size(ctx);
 		int len      = 0;
 		int this_len = 0;
 
-		out.resize(max(blk, rem) + blk);
+		out.resize(in.size());
 		
 		while (rem > 0) {
-			int req = min(blk, rem);
-			
 			if (EVP_CipherUpdate(
 				ctx,
 				out.data() + len,
 				&this_len,
 				in.data() + len,
-				req) != 1) return false;
+				rem) != 1) return false;
 			
 			rem -= this_len;
 			len += this_len;
 		}
 		
-		if (EVP_CipherFinal_ex(
-			ctx,
-			out.data() + len,
-			&this_len) != 1) return false;
-		
-		len += this_len;
-
-		assert(len <= out.size());
-		
-		out.resize(len);
+		assert(len == out.size());
 		
 		return true;
 	}
@@ -890,10 +883,8 @@ namespace clarcnet {
 		auto temp_key_data = temp_key.data();
 		int  temp_key_enc_lens[1] = { 0 };
 
-		auto ctx = EVP_CIPHER_CTX_new();
-		
 		int npubk = EVP_SealInit(
-			ctx,
+			ci->ctx_enc,
 			cphr,
 			&temp_key_data,
 			temp_key_enc_lens,
@@ -902,10 +893,7 @@ namespace clarcnet {
 			1
 		);
 		
-		if (npubk != 1) {
-			EVP_CIPHER_CTX_free(ctx);
-			return FAILURE;
-		}
+		if (npubk != 1) return FAILURE;
 		
 		ci->session_key.resize(EVP_CIPHER_key_length(cphr));
 		ci->iv.resize(EVP_CIPHER_iv_length(cphr));
@@ -914,9 +902,7 @@ namespace clarcnet {
 		RAND_bytes(ci->iv.data(), static_cast<int>(ci->iv.size()));
 
 		vector<uint8_t> session_key_enc;
-		cipher(true, ctx, *ci, ci->session_key, session_key_enc, false);
-
-		EVP_CIPHER_CTX_free(ctx);
+		cipher(ci->ctx_enc, *ci, ci->session_key, session_key_enc);
 
 		packet session(fd, ID_CIPHER);
 		session.srlz(true, temp_key);
@@ -924,6 +910,10 @@ namespace clarcnet {
 		session.srlz(true, session_key_enc);
 		session.srlz(true, ci->iv);
 
+		// Initialize our session ciphers
+		cipher_init(true,  ci->ctx_enc, ci->session_key.data(), ci->iv.data());
+		cipher_init(false, ci->ctx_dec, ci->session_key.data(), ci->iv.data());
+		
 		ci->st = conn_info::CONNECTED;
 		out.emplace_back(packet(fd, ID_CONNECTION));
 
