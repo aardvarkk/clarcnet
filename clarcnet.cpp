@@ -10,7 +10,8 @@ using namespace std;
 namespace clarcnet {
 
 	const ver_t       ver_code = 0;
-	const EVP_CIPHER* cipher_t = EVP_aes_128_cbc();
+	const EVP_CIPHER* cipher_t = EVP_aes_128_ctr();
+		// EVP_aes_128_cbc() -- seems to force padding so we can't have messages less than block size
 
 	void* in_addr(sockaddr* sa) {
 		switch (sa->sa_family) {
@@ -91,15 +92,13 @@ namespace clarcnet {
 		last_packet_recv(clk::now()),
 		st(UNKNOWN)
 	{
-		ctx_enc = EVP_CIPHER_CTX_new();
-		ctx_dec = EVP_CIPHER_CTX_new();
-		fill(addr_str, addr_str + sizeof addr_str, 0);
+		ctx = EVP_CIPHER_CTX_new();
+		fill(addr_str, addr_str + sizeof(addr_str), 0);
 	}
 	
 	conn_info::~conn_info()
 	{
-		EVP_CIPHER_CTX_free(ctx_enc);
-		EVP_CIPHER_CTX_free(ctx_dec);
+		EVP_CIPHER_CTX_free(ctx);
 	}
 
 	peer::peer() :
@@ -202,6 +201,13 @@ namespace clarcnet {
 		// If it's a heartbeat, we're done!
 		if (p.mid == ID_HEARTBEAT) return code;
 
+		// Encrypt!
+		if (p.mid >= ID_USER) {
+			vector<uint8_t> p_enc;
+			cipher(true, ci.ctx, ci, p, p_enc);
+			p.vector::operator=(p_enc);
+		}
+		
 		// Header
 		streambuffer header;
 		len_t l(p.size());
@@ -211,6 +217,7 @@ namespace clarcnet {
 
 		// Payload
 		code = send_sock(fd, &p.front(), p.size());
+		
 		return code;
 	}
 
@@ -287,12 +294,21 @@ namespace clarcnet {
 		ci.r.w.rpos = 0;
 		ci.r.w.resize(ci.r.req.v);
 		ci.r.w.fd = fd;
+		
+		// Decrypt!
+		if (ci.r.w.mid >= ID_USER) {
+			vector<uint8_t> p_dec;
+			cipher(false, ci.ctx, ci, ci.r.w, p_dec);
+			ci.r.w.vector::operator=(p_dec);
+		}
+		
 		ps.emplace_back(move(ci.r.w));
+		
 		ci.r = receive_state();
 		ci.last_packet_recv = clk::now();
 	}
 
-	ret_code peer::recv(int fd, conn_info &ci, packets &ps)
+	ret_code peer::recv(int fd, conn_info &ci, packets &ps, int max)
 	{
 		receive_state& r = ci.r;
 
@@ -346,6 +362,7 @@ namespace clarcnet {
 
 					if (r.recvd == r.req) {
 						recv_packet(fd, ci, ps);
+						if (max && ps.size() >= max) return code;
 						break;
 					}
 				}
@@ -529,6 +546,7 @@ namespace clarcnet {
 		in.front().srlz(false, temp_iv);
 		
 		auto ctx = EVP_CIPHER_CTX_new();
+		
 		int keys = EVP_OpenInit(
 			ctx,
 			cphr,
@@ -538,13 +556,18 @@ namespace clarcnet {
 			private_key
 			);
 
-		if (keys != 1) return FAILURE;
+		if (keys != 1) {
+			EVP_CIPHER_CTX_free(ctx);
+			return FAILURE;
+		}
 		
 		vector<uint8_t> session_key_enc;
 		in.front().srlz(false, session_key_enc);
 		in.front().srlz(false, ci.iv);
 		
-		cipher(false, ctx, session_key_enc, ci.session_key);
+		cipher(false, ctx, ci, session_key_enc, ci.session_key, false);
+
+		EVP_CIPHER_CTX_free(ctx);
 		
 		ci.st = conn_info::CONNECTED;
 		out.emplace_back(packet(cfd, ID_CONNECTION));
@@ -603,7 +626,12 @@ namespace clarcnet {
 			
 			packets in;
 			
-			code = peer::recv(cfd, ci, ci.st == conn_info::CONNECTED ? out : in);
+			code = peer::recv(
+				cfd,
+				ci,
+				ci.st == conn_info::CONNECTED ? out : in,
+				ci.st == conn_info::CONNECTED ? 0 : 1
+				);
 			
 			if (ci.st == conn_info::INITIATED) {
 				code = process_initiated(cfd, ci, in, out);
@@ -786,19 +814,19 @@ namespace clarcnet {
 	bool peer::cipher(
 		bool encrypt,
 		EVP_CIPHER_CTX* ctx,
+		conn_info& ci,
 		vector<uint8_t> const& in,
 		vector<uint8_t>& out,
-		uint8_t* key,
-		uint8_t* iv
+		bool init
 	)
 	{
-		if (key) {
+		if (init) {
 			if (EVP_CipherInit_ex(
 				ctx,
 				cphr,
 				nullptr,
-				key,
-				iv,
+				ci.session_key.data(),
+				ci.iv.data(),
 				encrypt) != 1) return false;
 		}
 		
@@ -806,8 +834,8 @@ namespace clarcnet {
 		int blk      = EVP_CIPHER_CTX_block_size(ctx);
 		int len      = 0;
 		int this_len = 0;
-		
-		out.resize(in.size() + blk);
+
+		out.resize(max(blk, rem) + blk);
 		
 		while (rem > 0) {
 			int req = min(blk, rem);
@@ -830,8 +858,8 @@ namespace clarcnet {
 		
 		len += this_len;
 
-		assert(len <= in.size() + blk);
-
+		assert(len <= out.size());
+		
 		out.resize(len);
 		
 		return true;
@@ -863,6 +891,7 @@ namespace clarcnet {
 		int  temp_key_enc_lens[1] = { 0 };
 
 		auto ctx = EVP_CIPHER_CTX_new();
+		
 		int npubk = EVP_SealInit(
 			ctx,
 			cphr,
@@ -873,7 +902,10 @@ namespace clarcnet {
 			1
 		);
 		
-		if (npubk != 1) return FAILURE;
+		if (npubk != 1) {
+			EVP_CIPHER_CTX_free(ctx);
+			return FAILURE;
+		}
 		
 		ci->session_key.resize(EVP_CIPHER_key_length(cphr));
 		ci->iv.resize(EVP_CIPHER_iv_length(cphr));
@@ -882,7 +914,7 @@ namespace clarcnet {
 		RAND_bytes(ci->iv.data(), static_cast<int>(ci->iv.size()));
 
 		vector<uint8_t> session_key_enc;
-		cipher(true, ctx, ci->session_key, session_key_enc);
+		cipher(true, ctx, *ci, ci->session_key, session_key_enc, false);
 
 		EVP_CIPHER_CTX_free(ctx);
 
@@ -907,7 +939,12 @@ namespace clarcnet {
 		
 		if (fd < 0) return out;
 		
-		code = peer::recv(fd, *ci, ci->st == conn_info::CONNECTED ? out : in);
+		code = peer::recv(
+			fd,
+			*ci,
+			ci->st == conn_info::CONNECTED ? out : in,
+			ci->st == conn_info::CONNECTED ? 0 : 1
+			);
 		
 		if (ci->st == conn_info::DISCONNECTED) {
 			code = process_disconnected();

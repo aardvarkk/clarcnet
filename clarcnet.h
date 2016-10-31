@@ -336,9 +336,7 @@ namespace clarcnet {
 		tp            last_heartbeat_sent; // know when to send more heartbeats
 		state         st;                  // state of the connection
 		
-		EVP_CIPHER_CTX* ctx_enc; // cipher context for encryption
-		EVP_CIPHER_CTX* ctx_dec; // cipher context for decryption
-		
+		EVP_CIPHER_CTX* ctx; // cipher context
 		std::vector<uint8_t> session_key, iv; // session key and initialization vector
 	};
 	
@@ -370,15 +368,15 @@ namespace clarcnet {
 		bool cipher(
 			bool encrypt,
 			EVP_CIPHER_CTX* ctx,
+			conn_info& ci,
 			std::vector<uint8_t> const& in,
 			std::vector<uint8_t>& out,
-			uint8_t* key = nullptr,
-			uint8_t* iv = nullptr
+			bool init = true
 			);
 		
 		conn_map::iterator disconnect(conn_map::iterator conn_it);
 
-		ret_code recv(int fd, conn_info& ci, packets& ps);
+		ret_code recv(int fd, conn_info& ci, packets& ps, int max = 0);
 		ret_code send(int fd, conn_info& ci, packet&& p);
 
 		void        flush_backlog();
