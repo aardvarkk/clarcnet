@@ -578,7 +578,7 @@ namespace clarcnet {
 		ci.st = conn_info::CONNECTED;
 		out.emplace_back(packet(cfd, ID_CONNECTION));
 		
-		LOG(INFO) << "connected " << cfd;
+		LOG(DEBUG) << "connected " << cfd;
 		
 		return SUCCESS;
 	}
@@ -597,7 +597,7 @@ namespace clarcnet {
 					thr;
 				}
 			} else {
-				LOG(INFO) << "accept " << cfd;
+				LOG(DEBUG) << "accept " << cfd;
 				
 				assert(!conns.count(cfd));
 				
@@ -738,6 +738,8 @@ namespace clarcnet {
 
 	void client::disconnect()
 	{
+		LOG(DEBUG) << "close " << fd;
+		
 		peer::close(fd);
 		fd = -1;
 		conns.clear();
