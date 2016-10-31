@@ -337,7 +337,10 @@ namespace clarcnet {
 		tp            last_heartbeat_sent; // know when to send more heartbeats
 		state         st;                  // state of the connection
 		
-		EVP_CIPHER_CTX*      ctx;          // cipher context
+		EVP_CIPHER_CTX* ctx_enc; // cipher context for encryption
+		EVP_CIPHER_CTX* ctx_dec; // cipher context for decryption
+		
+		std::vector<uint8_t> session_key, iv; // session key and initialization vector
 	};
 	
 	struct delayed_send {
@@ -361,6 +364,21 @@ namespace clarcnet {
 
 	protected:
 
+		bool cipher_init(
+			bool encrypt,
+			EVP_CIPHER_CTX* ctx,
+			uint8_t* key,
+			uint8_t* iv
+		);
+		
+		bool cipher_run(
+			bool encrypt,
+			EVP_CIPHER_CTX* ctx,
+			std::vector<uint8_t> const& in,
+			std::vector<uint8_t>& out
+			);
+		
+		
 		void     finish_packet(int fd, conn_info &ci, packets &ps);
 		void     flush_backlog();
 		bool     poll_write();

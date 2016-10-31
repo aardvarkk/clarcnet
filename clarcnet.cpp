@@ -2,13 +2,15 @@
 
 #include <cassert>
 #include <easylogging++.h>
+#include <openssl/err.h>
+#include <openssl/rand.h>
 
 using namespace std;
 
 namespace clarcnet {
 
 	const ver_t       ver_code = 0;
-	const EVP_CIPHER* cipher_t = EVP_aes_128_ctr();
+	const EVP_CIPHER* cipher_t = EVP_aes_128_cbc();
 
 	void* in_addr(sockaddr* sa) {
 		switch (sa->sa_family) {
@@ -89,13 +91,15 @@ namespace clarcnet {
 		last_packet_recv(clk::now()),
 		st(UNKNOWN)
 	{
-		ctx = EVP_CIPHER_CTX_new();
+		ctx_enc = EVP_CIPHER_CTX_new();
+		ctx_dec = EVP_CIPHER_CTX_new();
 		fill(addr_str, addr_str + sizeof addr_str, 0);
 	}
 	
 	conn_info::~conn_info()
 	{
-		EVP_CIPHER_CTX_free(ctx);
+		EVP_CIPHER_CTX_free(ctx_enc);
+		EVP_CIPHER_CTX_free(ctx_dec);
 	}
 
 	peer::peer() :
@@ -502,26 +506,31 @@ namespace clarcnet {
 		
 		if (in.empty() || in.front().mid != ID_CIPHER) return WAITING;
 		
-		vector<uint8_t> session_key_enc;
-		vector<uint8_t> iv;
-		in.front().srlz(false, session_key_enc);
-		in.front().srlz(false, iv);
+		vector<uint8_t> temp_key, temp_iv;
+		in.front().srlz(false, temp_key);
+		in.front().srlz(false, temp_iv);
 		
+		auto ctx = EVP_CIPHER_CTX_new();
 		int keys = EVP_OpenInit(
-			ci.ctx,
+			ctx,
 			cipher,
-			session_key_enc.data(),
-			static_cast<int>(session_key_enc.size()),
-			iv.data(),
+			temp_key.data(),
+			static_cast<int>(temp_key.size()),
+			temp_iv.data(),
 			private_key
 			);
+
+		if (keys != 1) return FAILURE;
 		
-		if (keys == 1) {
-			ci.st = conn_info::SECURED;
-			return SUCCESS;
-		} else {
-			return FAILURE;
-		}
+		vector<uint8_t> session_key_enc;
+		in.front().srlz(false, session_key_enc);
+		in.front().srlz(false, ci.iv);
+		
+		cipher_run(false, ctx, session_key_enc, ci.session_key);
+		
+		ci.st = conn_info::SECURED;
+		
+		return SUCCESS;
 	}
 	
 	ret_code server::process_secured(int cfd, conn_info& ci, packets& in, packets& out)
@@ -779,6 +788,64 @@ namespace clarcnet {
 		}
 	}
 	
+	bool peer::cipher_init(
+		bool encrypt,
+		EVP_CIPHER_CTX* ctx,
+		uint8_t* key,
+		uint8_t* iv
+	)
+	{
+		return EVP_CipherInit_ex(
+			ctx,
+			cipher_t,
+			nullptr,
+			key,
+			iv,
+			encrypt) == 1;
+	}
+		
+	bool peer::cipher_run(
+		bool encrypt,
+		EVP_CIPHER_CTX* ctx,
+		vector<uint8_t> const& in,
+		vector<uint8_t>& out
+	)
+	{
+		int rem      = static_cast<int>(in.size());
+		int blk      = EVP_CIPHER_CTX_block_size(ctx);
+		int len      = 0;
+		int this_len = 0;
+		
+		out.resize(in.size() + blk);
+		
+		while (rem > 0) {
+			int req = min(blk, rem);
+			
+			if (EVP_CipherUpdate(
+				ctx,
+				out.data() + len,
+				&this_len,
+				in.data() + len,
+				req) != 1) return false;
+			
+			rem -= this_len;
+			len += this_len;
+		}
+		
+		if (EVP_CipherFinal_ex(
+			ctx,
+			out.data() + len,
+			&this_len) != 1) return false;
+		
+		len += this_len;
+
+		assert(len <= in.size() + blk);
+
+		out.resize(len);
+		
+		return true;
+	}
+	
 	ret_code client::process_versioned(packets& in, packets& out)
 	{
 		LOG(DEBUG) << "process_versioned";
@@ -789,43 +856,50 @@ namespace clarcnet {
 		in.front().srlz(false, pubkey);
 		in.erase(in.begin());
 		
-		bool success = true;
-		vector<uint8_t> session_key_enc, iv;
+		if (pubkey.empty()) return FAILURE;
 		
-		if (!pubkey.empty()) {
-			const uint8_t* data = pubkey.data();
-			auto pkey = d2i_PUBKEY(nullptr, &data, pubkey.size());
-			
-			session_key_enc.resize(EVP_PKEY_size(pkey));
-			iv.resize(EVP_CIPHER_iv_length(cipher_t));
+		const uint8_t* data = pubkey.data();
+		auto pkey = d2i_PUBKEY(nullptr, &data, pubkey.size());
 
-			auto session_key_enc_data = session_key_enc.data();
-			int  session_key_enc_lens[1] = { 0 };
-			
-			int npubk = EVP_SealInit(
-				ci.ctx,
-				cipher_t,
-				&session_key_enc_data,
-				session_key_enc_lens,
-				iv.data(),
-				&pkey,
-				1
-			);
-			
-			success = npubk == 1;
-		}
+		vector<uint8_t> temp_key(EVP_PKEY_size(pkey));
+		vector<uint8_t> temp_iv(EVP_CIPHER_iv_length(cipher_t));
+
+		auto temp_key_data = temp_key.data();
+		int  temp_key_enc_lens[1] = { 0 };
+
+		auto ctx = EVP_CIPHER_CTX_new();
+		int npubk = EVP_SealInit(
+			ctx,
+			cipher_t,
+			&temp_key_data,
+			temp_key_enc_lens,
+			temp_iv.data(),
+			&pkey,
+			1
+		);
 		
-		if (success) {
-			ci.st = conn_info::SECURED;
-			
-			packet session(fd, ID_CIPHER);
-			session.srlz(true, session_key_enc);
-			session.srlz(true, iv);
-			
-			return send(move(session));
-		} else {
-			return FAILURE;
-		}
+		if (npubk != 1) return FAILURE;
+		
+		ci.session_key.resize(EVP_CIPHER_key_length(cipher_t));
+		ci.iv.resize(EVP_CIPHER_iv_length(cipher_t));
+		
+		RAND_bytes(ci.session_key.data(), static_cast<int>(ci.session_key.size()));
+		RAND_bytes(ci.iv.data(), static_cast<int>(ci.iv.size()));
+
+		vector<uint8_t> session_key_enc;
+		cipher_run(true, ctx, ci.session_key, session_key_enc);
+
+		packet session(fd, ID_CIPHER);
+		session.srlz(true, temp_key);
+		session.srlz(true, temp_iv);
+		session.srlz(true, session_key_enc);
+		session.srlz(true, ci.iv);
+
+		EVP_CIPHER_CTX_free(ctx);
+
+		ci.st = conn_info::SECURED;
+		
+		return send(move(session));
 	}
 	
 	ret_code client::process_secured(packets& in, packets& out)
