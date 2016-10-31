@@ -356,39 +356,47 @@ namespace clarcnet {
 	public:
 
 		peer();
-		ret_code close(int fd);
+
+		std::string address(int fd);
+		ret_code    close(int fd);
 
 		int fd;
-		ms lag_min, lag_max;
+		ms  lag_min, lag_max;
 
 	protected:
 
-		bool cipher_init(
-			bool encrypt,
-			EVP_CIPHER_CTX* ctx,
-			uint8_t* key,
-			uint8_t* iv
-		);
-		
-		bool cipher_run(
+		typedef std::unordered_map<int, conn_info> conn_map;
+
+		bool cipher(
 			bool encrypt,
 			EVP_CIPHER_CTX* ctx,
 			std::vector<uint8_t> const& in,
-			std::vector<uint8_t>& out
+			std::vector<uint8_t>& out,
+			uint8_t* key = nullptr,
+			uint8_t* iv = nullptr
 			);
 		
-		void     finish_packet(int fd, conn_info &ci, packets &ps);
-		void     flush_backlog();
-		bool     poll_write();
-		ret_code receive(int fd, conn_info &ci, packets &ps);
-		ret_code recv_into(int fd, void* buffer, len_t bytes, len_t& recvd);
-		void     remove_heartbeats(packets& ps);
-		ret_code send_sock(int fd, void const* data, size_t sz);
-		ret_code send_packet(int fd, packet &p);
-		ret_code send(int fd, packet&& p);
+		conn_map::iterator disconnect(conn_map::iterator conn_it);
+
+		ret_code recv(int fd, conn_info& ci, packets& ps);
+		ret_code send(int fd, conn_info& ci, packet&& p);
+
+		void        flush_backlog();
+		bool        poll_write();
+		void        remove_heartbeats(packets& ps);
 		
-		std::deque<delayed_send> delayed; // packets that we intentionally want to send late
-		std::default_random_engine rng; // used to generate lag values
+		conn_map                   conns;   // all connections. server generally has multiple, client has one
+		std::deque<delayed_send>   delayed; // packets that we intentionally want to send late
+		std::default_random_engine rng;     // used to generate lag values
+ 		const EVP_CIPHER*          cphr;    // cipher used for encryption/decryption
+
+	private:
+	
+		void     recv_packet(int fd, conn_info& ci, packets& ps);
+		ret_code send_packet(int fd, conn_info& ci, packet& p);
+
+		ret_code recv_sock(int fd, void* buffer, len_t bytes, len_t& recvd);
+		ret_code send_sock(int fd, void const* data, size_t sz);
 	};
 
 	class server : public peer
@@ -405,28 +413,23 @@ namespace clarcnet {
 		
 		~server();
 		
-		std::string address(int cfd);
-		void        disconnect(int cfd);
-		packets     process(bool accept_new = true);
-		ret_code    send(int fd, packet&& p);
+		void     disconnect(int cfd);
+		packets  process(bool accept_new = true);
+		ret_code send(int fd, packet&& p);
 
 	protected:
 
 		EVP_PKEY* load_key(bool is_public, std::string const& filename);
 		
-		void     process_accept();
-		ret_code process_initiated(int cfd, conn_info& ci, packets& in, packets& out);
-		ret_code process_versioned(int cfd, conn_info& ci, packets& in, packets& out);
+		void      process_accept();
+		ret_code  process_initiated(int cfd, conn_info& ci, packets& in, packets& out);
+		ret_code  process_versioned(int cfd, conn_info& ci, packets& in, packets& out);
 		
-		typedef std::unordered_map<int, conn_info> conn_map;
-		conn_map::iterator disconnect(conn_map::iterator conn_it);
-		conn_map conns;
-		ms       heartbeat_period;
-		ms       timeout;
+		ms        heartbeat_period;
+		ms        timeout;
 		
-		const EVP_CIPHER* cipher;
-		EVP_PKEY*         public_key;
-		EVP_PKEY*         private_key;
+		EVP_PKEY* public_key;
+		EVP_PKEY* private_key;
 	};
 
 	class client : public peer
@@ -435,7 +438,6 @@ namespace clarcnet {
 		
 		client(std::string const& host, uint16_t port, ms timeout = ms(0));
 		
-		std::string address();
 		void        disconnect();
 		packets     process();
 		ret_code    send(packet&& p);
@@ -446,9 +448,9 @@ namespace clarcnet {
 		ret_code  process_initiated(packets& in, packets& out);
 		ret_code  process_versioned(packets& in, packets& out);
 		
-		tp        conn_start;
-		conn_info ci;
-		addrinfo* res;
-		ms        timeout;
+		conn_info* ci;         // convenience pointer into peer connection map
+		tp         conn_start;
+		addrinfo*  res;
+		ms         timeout;
 	};
 }

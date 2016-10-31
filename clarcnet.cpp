@@ -193,7 +193,7 @@ namespace clarcnet {
 		return FAILURE;
 	}
 
-	ret_code peer::send_packet(int fd, packet &p)
+	ret_code peer::send_packet(int fd, conn_info& ci, packet &p)
 	{
 		// Message ID
 		auto code = send_sock(fd, &p.mid, sizeof(p.mid));
@@ -221,7 +221,10 @@ namespace clarcnet {
 			if (delayed.front().earliest > now) break;
 
 			delayed_send ds = delayed.front();
-			ret_code code = send_packet(ds.fd, ds.p);
+			
+			if (!conns.count(ds.fd)) continue;
+			
+			ret_code code = send_packet(ds.fd, conns[ds.fd], ds.p);
 
 			if (code != SUCCESS) {
 				break;
@@ -231,10 +234,10 @@ namespace clarcnet {
 		}
 	}
 
-	ret_code peer::send(int fd, packet&& p)
+	ret_code peer::send(int fd, conn_info& ci, packet&& p)
 	{
 		if (!lag_max.count()) {
-			return send_packet(fd, p);
+			return send_packet(fd, ci, p);
 		} else {
 			uniform_int_distribution<> dist_lag(
 					static_cast<int>(lag_min.count()),
@@ -246,12 +249,12 @@ namespace clarcnet {
 		}
 	}
 
-	ret_code peer::recv_into(int fd, void* buffer, len_t bytes, len_t& recvd)
+	ret_code peer::recv_sock(int fd, void* buffer, len_t bytes, len_t& recvd)
 	{
 		if (!bytes.v) return SUCCESS;
 
 		// Try to retrieve exactly the number required
-		ssize_t len = recv(fd, buffer, bytes.v, 0);
+		ssize_t len = ::recv(fd, buffer, bytes.v, 0);
 
 		// Mark the new size since we've received bytes
 		if (len > 0) recvd += len;
@@ -277,7 +280,7 @@ namespace clarcnet {
 		}
 	}
 
-	void peer::finish_packet(int fd, conn_info &ci, packets &ps)
+	void peer::recv_packet(int fd, conn_info &ci, packets &ps)
 	{
 		assert(fd > 0);
 		assert(ci.r.recvd == ci.r.req);
@@ -289,7 +292,7 @@ namespace clarcnet {
 		ci.last_packet_recv = clk::now();
 	}
 
-	ret_code peer::receive(int fd, conn_info &ci, packets &ps)
+	ret_code peer::recv(int fd, conn_info &ci, packets &ps)
 	{
 		receive_state& r = ci.r;
 
@@ -297,12 +300,12 @@ namespace clarcnet {
 		for (;;) {
 
 			if (r.state == receive_state::MessageID) {
-				auto code = recv_into(fd, &r.w.mid, r.req - r.recvd, r.recvd);
+				auto code = recv_sock(fd, &r.w.mid, r.req - r.recvd, r.recvd);
 				if (code != SUCCESS) return code;
 
 				// If the message is a heartbeat, we're done!
 				if (r.w.mid == ID_HEARTBEAT) {
-					finish_packet(fd, ci, ps);
+					recv_packet(fd, ci, ps);
 					continue;
 				}
 
@@ -312,7 +315,7 @@ namespace clarcnet {
 			}
 
 			if (r.state == receive_state::HeaderIntro) {
-				auto code = recv_into(fd, &r.w.front(), r.req - r.recvd, r.recvd);
+				auto code = recv_sock(fd, &r.w.front(), r.req - r.recvd, r.recvd);
 				if (code != SUCCESS) return code;
 
 				r.state = receive_state::Header;
@@ -321,7 +324,7 @@ namespace clarcnet {
 			}
 
 			if (r.state == receive_state::Header) {
-				auto code = recv_into(fd, &r.w[r.recvd.v], r.req - r.recvd, r.recvd);
+				auto code = recv_sock(fd, &r.w[r.recvd.v], r.req - r.recvd, r.recvd);
 				if (code != SUCCESS) return code;
 
 				r.state = receive_state::Payload;
@@ -338,11 +341,11 @@ namespace clarcnet {
 					// but don't resize directly to client request because they could make us allocate tons of memory!
 					if (r.w.size() < r.req.v) r.w.resize(r.w.size() * 2);
 
-					auto code = recv_into(fd, &r.w[r.recvd.v], min(r.w.size() - r.recvd.v, (r.req - r.recvd).v), r.recvd);
+					auto code = recv_sock(fd, &r.w[r.recvd.v], min(r.w.size() - r.recvd.v, (r.req - r.recvd).v), r.recvd);
 					if (code != SUCCESS) return code;
 
 					if (r.recvd == r.req) {
-						finish_packet(fd, ci, ps);
+						recv_packet(fd, ci, ps);
 						break;
 					}
 				}
@@ -350,6 +353,23 @@ namespace clarcnet {
 		}
 	}
 
+	// Internal disconnect -- called when we find disconnection/inactive
+	peer::conn_map::iterator peer::disconnect(peer::conn_map::iterator conn_it)
+	{
+		int cfd = conn_it->first;
+		delayed.erase(remove_if(delayed.begin(), delayed.end(),
+														[=](delayed_send const& ds) {
+															return ds.fd == cfd;
+														}), delayed.end());
+		return conns.erase(conn_it);
+	}
+	
+	string peer::address(int fd)
+	{
+		if (!conns.count(fd)) return string();
+		return conns[fd].addr_str;
+	}
+	
 	EVP_PKEY* server::load_key(bool is_public, std::string const& filename)
 	{
 		EVP_PKEY* key = nullptr;
@@ -379,7 +399,7 @@ namespace clarcnet {
 	{
 		public_key  = load_key(true,  pubkeyfile);
 		private_key = load_key(false, prvkeyfile);
-		cipher      = (public_key && private_key) ? cipher_t : EVP_enc_null();
+		cphr        = (public_key && private_key) ? cipher_t : EVP_enc_null();
 		
 		int err;
 		addrinfo hints    = {}, *res;
@@ -431,10 +451,8 @@ namespace clarcnet {
 		
 	ret_code server::send(int fd, packet&& p)
 	{
-		auto it = conns.find(fd);
-		if (it == conns.end()) return FAILURE;
-
-		auto code = peer::send(fd, move(p));
+		if (!conns.count(fd)) return FAILURE;
+		auto code = peer::send(fd, conns[fd], move(p));
 		return code;
 	}
 
@@ -513,7 +531,7 @@ namespace clarcnet {
 		auto ctx = EVP_CIPHER_CTX_new();
 		int keys = EVP_OpenInit(
 			ctx,
-			cipher,
+			cphr,
 			temp_key.data(),
 			static_cast<int>(temp_key.size()),
 			temp_iv.data(),
@@ -526,7 +544,7 @@ namespace clarcnet {
 		in.front().srlz(false, session_key_enc);
 		in.front().srlz(false, ci.iv);
 		
-		cipher_run(false, ctx, session_key_enc, ci.session_key);
+		cipher(false, ctx, session_key_enc, ci.session_key);
 		
 		ci.st = conn_info::CONNECTED;
 		out.emplace_back(packet(cfd, ID_CONNECTION));
@@ -585,7 +603,7 @@ namespace clarcnet {
 			
 			packets in;
 			
-			code = receive(cfd, ci, ci.st == conn_info::CONNECTED ? out : in);
+			code = peer::recv(cfd, ci, ci.st == conn_info::CONNECTED ? out : in);
 			
 			if (ci.st == conn_info::INITIATED) {
 				code = process_initiated(cfd, ci, in, out);
@@ -602,19 +620,19 @@ namespace clarcnet {
 
 			if (code == FAILURE) {
 				if (ci.st == conn_info::CONNECTED) out.emplace_back(packet(cfd, ID_DISCONNECTION));
-				fd_to_ci = disconnect(fd_to_ci);
+				fd_to_ci = peer::disconnect(fd_to_ci);
 				continue;
 			} else {
 				if (now - ci.last_packet_recv > timeout) {
 					if (ci.st == conn_info::CONNECTED) out.emplace_back(packet(cfd, ID_TIMEOUT));
-					fd_to_ci = disconnect(fd_to_ci);
+					fd_to_ci = peer::disconnect(fd_to_ci);
 					continue;
 				}
 
 				if (now - max(ci.last_heartbeat_sent, ci.last_packet_recv) >= heartbeat_period) {
 					if (send(cfd, packet(cfd, ID_HEARTBEAT)) != SUCCESS) {
 						if (ci.st == conn_info::CONNECTED) out.emplace_back(packet(cfd, ID_DISCONNECTION));
-						fd_to_ci = disconnect(fd_to_ci);
+						fd_to_ci = peer::disconnect(fd_to_ci);
 						continue;
 					}
 					ci.last_heartbeat_sent = now;
@@ -629,37 +647,21 @@ namespace clarcnet {
 		return out;
 	}
 
-	string server::address(int cfd)
-	{
-		auto fd_to_ci = conns.find(cfd);
-		return fd_to_ci == conns.end() ? "" : fd_to_ci->second.addr_str;
-	}
-
 	// External disconnect -- called by others
 	// Since they pass a file descriptor, we know we can close it and reuse it since they should be done with it
 	void server::disconnect(int cfd)
 	{
 		auto conn_it = conns.find(cfd);
-		if (conn_it != conns.end()) disconnect(conn_it);
+		if (conn_it != conns.end())
+			peer::disconnect(conn_it);
 		peer::close(cfd);
 	}
 
-	// Internal disconnect -- called when we determine a client has disconnected or inactive
-	server::conn_map::iterator server::disconnect(server::conn_map::iterator conn_it)
-	{
-		int cfd = conn_it->first;
-		delayed.erase(remove_if(delayed.begin(), delayed.end(),
-		[=](delayed_send const& ds) {
-			return ds.fd == cfd;
-		}), delayed.end());
-		return conns.erase(conn_it);
-	}
-
 	client::client(string const& host, uint16_t port, ms timeout) :
+		ci(nullptr),
 		timeout(timeout)
 	{
 		conn_start = clk::now();
-		ci.st = conn_info::DISCONNECTED;
 
 		addrinfo hints    = {};
 		hints.ai_family   = AF_UNSPEC;
@@ -680,28 +682,33 @@ namespace clarcnet {
 		val = 1;
 		err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 		chk(err);
-#ifdef SO_NOSIGPIPE
+		#ifdef SO_NOSIGPIPE
 		val = 1;
 		err = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
 		chk(err);
-#endif
+		#endif
 		err = connect(fd, res->ai_addr, res->ai_addrlen);
 
 		if (err < 0 && errno != EINPROGRESS) {
 			thr;
 		}
+		
+		// Set up connection map
+		ci = &conns[fd];
+		ci->st = conn_info::DISCONNECTED;
 	}
 
 	void client::disconnect()
 	{
 		peer::close(fd);
 		fd = -1;
-		ci.st = conn_info::DISCONNECTED;
+		conns.clear();
+		ci = nullptr;
 	}
 
 	ret_code client::send(packet&& p)
 	{
-		return peer::send(this->fd, move(p));
+		return peer::send(fd, *ci, move(p));
 	}
 
 	ret_code client::process_disconnected()
@@ -710,9 +717,9 @@ namespace clarcnet {
 		
 		if (!poll_write()) return WAITING;
 		
-		ci.st = conn_info::INITIATED;
+		ci->st = conn_info::INITIATED;
 		
-		inet_ntop(res->ai_family, in_addr(res->ai_addr), ci.addr_str, sizeof ci.addr_str);
+		inet_ntop(res->ai_family, in_addr(res->ai_addr), ci->addr_str, sizeof(ci->addr_str));
 		freeaddrinfo(res);
 		res = nullptr;
 		
@@ -768,7 +775,7 @@ namespace clarcnet {
 		in.erase(in.begin());
 		
 		if (match) {
-			ci.st = conn_info::VERSIONED;
+			ci->st = conn_info::VERSIONED;
 			return SUCCESS;
 		} else {
 			out.push_back(packet(fd, ID_VERSION));
@@ -776,29 +783,25 @@ namespace clarcnet {
 		}
 	}
 	
-	bool peer::cipher_init(
+	bool peer::cipher(
 		bool encrypt,
 		EVP_CIPHER_CTX* ctx,
+		vector<uint8_t> const& in,
+		vector<uint8_t>& out,
 		uint8_t* key,
 		uint8_t* iv
 	)
 	{
-		return EVP_CipherInit_ex(
-			ctx,
-			cipher_t,
-			nullptr,
-			key,
-			iv,
-			encrypt) == 1;
-	}
+		if (key) {
+			if (EVP_CipherInit_ex(
+				ctx,
+				cphr,
+				nullptr,
+				key,
+				iv,
+				encrypt) != 1) return false;
+		}
 		
-	bool peer::cipher_run(
-		bool encrypt,
-		EVP_CIPHER_CTX* ctx,
-		vector<uint8_t> const& in,
-		vector<uint8_t>& out
-	)
-	{
 		int rem      = static_cast<int>(in.size());
 		int blk      = EVP_CIPHER_CTX_block_size(ctx);
 		int len      = 0;
@@ -844,13 +847,17 @@ namespace clarcnet {
 		in.front().srlz(false, pubkey);
 		in.erase(in.begin());
 		
-		if (pubkey.empty()) return FAILURE;
+		if (pubkey.empty()) {
+			cphr = EVP_enc_null();
+			return SUCCESS;
+		}
 		
+		cphr = cipher_t;
 		const uint8_t* data = pubkey.data();
 		auto pkey = d2i_PUBKEY(nullptr, &data, pubkey.size());
 
 		vector<uint8_t> temp_key(EVP_PKEY_size(pkey));
-		vector<uint8_t> temp_iv(EVP_CIPHER_iv_length(cipher_t));
+		vector<uint8_t> temp_iv(EVP_CIPHER_iv_length(cphr));
 
 		auto temp_key_data = temp_key.data();
 		int  temp_key_enc_lens[1] = { 0 };
@@ -858,7 +865,7 @@ namespace clarcnet {
 		auto ctx = EVP_CIPHER_CTX_new();
 		int npubk = EVP_SealInit(
 			ctx,
-			cipher_t,
+			cphr,
 			&temp_key_data,
 			temp_key_enc_lens,
 			temp_iv.data(),
@@ -868,14 +875,14 @@ namespace clarcnet {
 		
 		if (npubk != 1) return FAILURE;
 		
-		ci.session_key.resize(EVP_CIPHER_key_length(cipher_t));
-		ci.iv.resize(EVP_CIPHER_iv_length(cipher_t));
+		ci->session_key.resize(EVP_CIPHER_key_length(cphr));
+		ci->iv.resize(EVP_CIPHER_iv_length(cphr));
 		
-		RAND_bytes(ci.session_key.data(), static_cast<int>(ci.session_key.size()));
-		RAND_bytes(ci.iv.data(), static_cast<int>(ci.iv.size()));
+		RAND_bytes(ci->session_key.data(), static_cast<int>(ci->session_key.size()));
+		RAND_bytes(ci->iv.data(), static_cast<int>(ci->iv.size()));
 
 		vector<uint8_t> session_key_enc;
-		cipher_run(true, ctx, ci.session_key, session_key_enc);
+		cipher(true, ctx, ci->session_key, session_key_enc);
 
 		EVP_CIPHER_CTX_free(ctx);
 
@@ -883,9 +890,9 @@ namespace clarcnet {
 		session.srlz(true, temp_key);
 		session.srlz(true, temp_iv);
 		session.srlz(true, session_key_enc);
-		session.srlz(true, ci.iv);
+		session.srlz(true, ci->iv);
 
-		ci.st = conn_info::CONNECTED;
+		ci->st = conn_info::CONNECTED;
 		out.emplace_back(packet(fd, ID_CONNECTION));
 
 		return send(move(session));
@@ -900,27 +907,27 @@ namespace clarcnet {
 		
 		if (fd < 0) return out;
 		
-		code = receive(fd, ci, ci.st == conn_info::CONNECTED ? out : in);
+		code = peer::recv(fd, *ci, ci->st == conn_info::CONNECTED ? out : in);
 		
-		if (ci.st == conn_info::DISCONNECTED) {
+		if (ci->st == conn_info::DISCONNECTED) {
 			code = process_disconnected();
 		}
 		
-		if (ci.st == conn_info::INITIATED) {
+		if (ci->st == conn_info::INITIATED) {
 			code = process_initiated(in, out);
 		}
 		
-		if (code != FAILURE && ci.st == conn_info::VERSIONED) {
+		if (code != FAILURE && ci->st == conn_info::VERSIONED) {
 			code = process_versioned(in, out);
 		}
 		
-		if (code != FAILURE && ci.st == conn_info::CONNECTED) {
+		if (code != FAILURE && ci->st == conn_info::CONNECTED) {
 			LOG(DEBUG) << "process_connected";
 			out.insert(out.begin(), in.begin(), in.end());
 		}
 		
 		if (code == FAILURE) {
-			ci.st = conn_info::DISCONNECTED;
+			ci->st = conn_info::DISCONNECTED;
 			out.emplace_back(packet(fd, ID_DISCONNECTION));
 			return out;
 		}
@@ -928,13 +935,13 @@ namespace clarcnet {
 		for (auto const& p : out) {
 			if (p.mid != ID_HEARTBEAT) continue;
 			if (send(packet(p)) != SUCCESS) {
-				ci.st = conn_info::DISCONNECTED;
+				ci->st = conn_info::DISCONNECTED;
 				out.emplace_back(packet(fd, ID_DISCONNECTION));
 				return out;
 			}
 		}
 
-		if (timeout != ms(0) && clk::now() - ci.last_packet_recv > timeout) {
+		if (timeout != ms(0) && clk::now() - ci->last_packet_recv > timeout) {
 			out.emplace_back(packet(fd, ID_TIMEOUT));
 			return out;
 		}
@@ -942,10 +949,5 @@ namespace clarcnet {
 		remove_heartbeats(out);
 		
 		return out;
-	}
-
-	string client::address()
-	{
-		return ci.addr_str;
 	}
 }
