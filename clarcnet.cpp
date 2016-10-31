@@ -9,6 +9,7 @@ using namespace std;
 
 namespace clarcnet {
 
+	const uint8_t     ver_transition = 0x11;
 	const ver_t       ver_code = 0;
 	const EVP_CIPHER* cipher_t = EVP_aes_128_ctr();
 		// EVP_aes_128_cbc() -- seems to force padding so we can't have messages less than block size
@@ -205,6 +206,7 @@ namespace clarcnet {
 
 		// Encrypt!
 		if (p.mid >= ID_USER) {
+			assert(ci.st == conn_info::CONNECTED);
 			vector<uint8_t> p_enc;
 			cipher(ci.ctx_enc, ci, p, p_enc);
 			p.vector::operator=(p_enc);
@@ -490,15 +492,15 @@ namespace clarcnet {
 			for (int i = 0; i < 6; ++i) {
 				uint8_t maxver;
 				in.front().srlz(false, maxver);
-				if (maxver != 0xFF) {
+				if (maxver != ver_transition) {
 					match = false;
 					break;
 				}
 			}
 			
-			resp.push_back(0xFF); resp.push_back(0xFF);
-			resp.push_back(0xFF); resp.push_back(0xFF);
-			resp.push_back(0xFF); resp.push_back(0xFF);
+			resp.push_back(ver_transition); resp.push_back(ver_transition);
+			resp.push_back(ver_transition); resp.push_back(ver_transition);
+			resp.push_back(ver_transition); resp.push_back(ver_transition);
 		}
 		// New approach
 		else if (in.front().size() == sizeof(ver_t)) {
@@ -571,6 +573,8 @@ namespace clarcnet {
 		ci.st = conn_info::CONNECTED;
 		out.emplace_back(packet(cfd, ID_CONNECTION));
 		
+		LOG(INFO) << "connected " << cfd;
+		
 		return SUCCESS;
 	}
 	
@@ -588,6 +592,8 @@ namespace clarcnet {
 					thr;
 				}
 			} else {
+				LOG(INFO) << "accept " << cfd;
+				
 				assert(!conns.count(cfd));
 				
 				conn_info& ci = conns[cfd];
@@ -757,10 +763,10 @@ namespace clarcnet {
 		// Old server will see we're too new and forward us
 		// New server will detect we're using old approach and allow it
 		if (true) {
-			uint8_t maxver = 0xFF;
-			version.srlz(true, maxver); version.srlz(true, maxver);
-			version.srlz(true, maxver); version.srlz(true, maxver);
-			version.srlz(true, maxver); version.srlz(true, maxver);
+			uint8_t v = ver_transition;
+			version.srlz(true, v); version.srlz(true, v);
+			version.srlz(true, v); version.srlz(true, v);
+			version.srlz(true, v); version.srlz(true, v);
 		}
 		else {
 			// New approach...
@@ -782,10 +788,10 @@ namespace clarcnet {
 		// TRANSITIONAL
 		// TODO: REMOVE
 		if (in.front().size() == 6) {
-			uint8_t maxver;
+			uint8_t v;
 			for (auto i = 0; i < 6; ++i) {
-				in.front().srlz(false, maxver);
-				if (maxver != 0xFF) {
+				in.front().srlz(false, v);
+				if (v != ver_transition) {
 					match = false;
 					break;
 				}
