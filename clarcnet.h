@@ -323,7 +323,6 @@ namespace clarcnet {
 			UNKNOWN,
 			INITIATED,
 			VERSIONED,
-			SECURED,
 			CONNECTED,
 			DISCONNECTED
 		};
@@ -378,7 +377,6 @@ namespace clarcnet {
 			std::vector<uint8_t>& out
 			);
 		
-		
 		void     finish_packet(int fd, conn_info &ci, packets &ps);
 		void     flush_backlog();
 		bool     poll_write();
@@ -419,7 +417,6 @@ namespace clarcnet {
 		void     process_accept();
 		ret_code process_initiated(int cfd, conn_info& ci, packets& in, packets& out);
 		ret_code process_versioned(int cfd, conn_info& ci, packets& in, packets& out);
-		ret_code process_secured(int cfd, conn_info& ci, packets& in, packets& out);
 		
 		typedef std::unordered_map<int, conn_info> conn_map;
 		conn_map::iterator disconnect(conn_map::iterator conn_it);
@@ -448,7 +445,6 @@ namespace clarcnet {
 		ret_code  process_disconnected();
 		ret_code  process_initiated(packets& in, packets& out);
 		ret_code  process_versioned(packets& in, packets& out);
-		ret_code  process_secured(packets& in, packets& out);
 		
 		tp        conn_start;
 		conn_info ci;

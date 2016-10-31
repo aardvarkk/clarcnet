@@ -528,17 +528,9 @@ namespace clarcnet {
 		
 		cipher_run(false, ctx, session_key_enc, ci.session_key);
 		
-		ci.st = conn_info::SECURED;
-		
-		return SUCCESS;
-	}
-	
-	ret_code server::process_secured(int cfd, conn_info& ci, packets& in, packets& out)
-	{
-		LOG(DEBUG) << "process_secured " << cfd;
-		
 		ci.st = conn_info::CONNECTED;
 		out.emplace_back(packet(cfd, ID_CONNECTION));
+		
 		return SUCCESS;
 	}
 	
@@ -603,10 +595,6 @@ namespace clarcnet {
 				code = process_versioned(cfd, ci, in, out);
 			}
 			
-			if (code != FAILURE && ci.st == conn_info::SECURED) {
-				code = process_secured(cfd, ci, in, out);
-			}
-
 			if (code != FAILURE && ci.st == conn_info::CONNECTED) {
 				LOG(DEBUG) << "process_connected";
 				out.insert(out.end(), in.begin(), in.end());
@@ -889,27 +877,18 @@ namespace clarcnet {
 		vector<uint8_t> session_key_enc;
 		cipher_run(true, ctx, ci.session_key, session_key_enc);
 
+		EVP_CIPHER_CTX_free(ctx);
+
 		packet session(fd, ID_CIPHER);
 		session.srlz(true, temp_key);
 		session.srlz(true, temp_iv);
 		session.srlz(true, session_key_enc);
 		session.srlz(true, ci.iv);
 
-		EVP_CIPHER_CTX_free(ctx);
-
-		ci.st = conn_info::SECURED;
-		
-		return send(move(session));
-	}
-	
-	ret_code client::process_secured(packets& in, packets& out)
-	{
-		LOG(DEBUG) << "process_secured";
-		
 		ci.st = conn_info::CONNECTED;
-		out.push_back(packet(fd, ID_CONNECTION));
-		
-		return SUCCESS;
+		out.emplace_back(packet(fd, ID_CONNECTION));
+
+		return send(move(session));
 	}
 	
 	packets client::process()
@@ -935,10 +914,6 @@ namespace clarcnet {
 			code = process_versioned(in, out);
 		}
 		
-		if (code != FAILURE && ci.st == conn_info::SECURED) {
-			code = process_secured(in, out);
-		}
-
 		if (code != FAILURE && ci.st == conn_info::CONNECTED) {
 			LOG(DEBUG) << "process_connected";
 			out.insert(out.begin(), in.begin(), in.end());
