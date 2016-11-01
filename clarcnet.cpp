@@ -285,7 +285,7 @@ namespace clarcnet {
 			return WAITING;
 		}
 		else {
-			if (errno == ECONNRESET || errno == ETIMEDOUT) {
+			if (errno == ECONNRESET || errno == ECONNREFUSED || errno == ETIMEDOUT) {
 				return FAILURE;
 			}
 			else if (errno == EAGAIN || errno == EWOULDBLOCK) {
