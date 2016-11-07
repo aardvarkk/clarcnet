@@ -321,6 +321,7 @@ namespace clarcnet {
 	
 		enum state {
 			UNKNOWN,
+			INITIATING,
 			INITIATED,
 			VERSIONED,
 			CONNECTED,
@@ -449,7 +450,7 @@ namespace clarcnet {
 
 	protected:
 	
-		ret_code  process_disconnected();
+		ret_code  process_initiating();
 		ret_code  process_initiated(packets& in, packets& out);
 		ret_code  process_versioned(packets& in, packets& out);
 		

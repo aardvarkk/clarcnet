@@ -733,7 +733,7 @@ namespace clarcnet {
 		
 		// Set up connection map
 		ci = &conns[fd];
-		ci->st = conn_info::DISCONNECTED;
+		ci->st = conn_info::INITIATING;
 	}
 
 	void client::disconnect()
@@ -751,9 +751,9 @@ namespace clarcnet {
 		return peer::send(fd, *ci, move(p));
 	}
 
-	ret_code client::process_disconnected()
+	ret_code client::process_initiating()
 	{
-		LOG(DEBUG) << "process_disconnected";
+		LOG(DEBUG) << "process_initiating";
 		
 		if (!poll_write()) return WAITING;
 		
@@ -941,22 +941,25 @@ namespace clarcnet {
 		flush_backlog();
 		
 		if (fd < 0) return out;
-		
+
+		if (ci->st == conn_info::DISCONNECTED)
+			return out;
+
 		code = peer::recv(
 			fd,
 			*ci,
 			ci->st == conn_info::CONNECTED ? out : in,
 			ci->st == conn_info::CONNECTED ? 0 : 1
 			);
-		
-		if (ci->st == conn_info::DISCONNECTED) {
-			code = process_disconnected();
+
+		if (ci->st == conn_info::INITIATING) {
+			code = process_initiating();
 		}
-		
+
 		if (ci->st == conn_info::INITIATED) {
 			code = process_initiated(in, out);
 		}
-		
+
 		if (code != FAILURE && ci->st == conn_info::VERSIONED) {
 			code = process_versioned(in, out);
 		}
