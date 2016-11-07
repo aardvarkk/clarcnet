@@ -938,12 +938,12 @@ namespace clarcnet {
 		packets  in, out;
 		ret_code code = SUCCESS;
 
-		flush_backlog();
-		
 		if (fd < 0) return out;
 
 		if (ci->st == conn_info::DISCONNECTED)
 			return out;
+
+		flush_backlog();
 
 		code = peer::recv(
 			fd,
