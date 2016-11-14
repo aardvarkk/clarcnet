@@ -575,6 +575,9 @@ namespace clarcnet {
 		cipher_init(true,  ci.ctx_enc, ci.session_key.data(), ci.iv.data());
 		cipher_init(false, ci.ctx_dec, ci.session_key.data(), ci.iv.data());
 
+		// We're done with the cipher message, so we won't pass it along to the client
+		in.erase(in.begin());
+		
 		ci.st = conn_info::CONNECTED;
 		out.emplace_back(packet(cfd, ID_CONNECTION));
 		
