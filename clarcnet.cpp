@@ -97,14 +97,25 @@ namespace clarcnet {
 		st(UNKNOWN)
 	{
 		ctx_enc = EVP_CIPHER_CTX_new();
+		assert(ctx_enc);
+		
 		ctx_dec = EVP_CIPHER_CTX_new();
-		fill(addr_str, addr_str + sizeof(addr_str), 0);
+		assert(ctx_dec);
+
+		LOG(INFO) << "conn_info() " << ctx_enc << " " << ctx_dec;
+		
+		memset(addr_str, 0, sizeof(addr_str));
 	}
 	
 	conn_info::~conn_info()
 	{
 		EVP_CIPHER_CTX_free(ctx_enc);
 		EVP_CIPHER_CTX_free(ctx_dec);
+		
+		ctx_enc = nullptr;
+		ctx_dec = nullptr;
+
+		LOG(INFO) << "~conn_info() " << ctx_enc << " " << ctx_dec;
 	}
 
 	peer::peer() :
@@ -309,6 +320,7 @@ namespace clarcnet {
 		
 		// Decrypt!
 		if (ci.r.w.mid >= ID_USER) {
+			LOG(INFO) << "Decrypting mid " << +ci.r.w.mid << " from " << fd;
 			vector<uint8_t> p_dec;
 			cipher(ci.ctx_dec, ci.r.w, p_dec);
 			ci.r.w.vector::operator=(p_dec);
