@@ -421,6 +421,7 @@ namespace clarcnet {
 		void     disconnect(int cfd);
 		packets  process(bool accept_new = true);
 		ret_code send(int fd, packet&& p);
+		size_t   num_conns();
 
 	protected:
 

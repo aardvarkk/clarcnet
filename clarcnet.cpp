@@ -660,19 +660,42 @@ namespace clarcnet {
 			}
 
 			if (code == FAILURE) {
-				if (ci.st == conn_info::CONNECTED) out.emplace_back(packet(cfd, ID_DISCONNECTION));
+				// If we made it to the connected stage, it's the listener's job to close our FD
+				// If not, we close it ourselves
+				if (ci.st == conn_info::CONNECTED) {
+					out.emplace_back(packet(cfd, ID_DISCONNECTION));
+				} else {
+					close(cfd);
+				}
 				fd_to_ci = peer::disconnect(fd_to_ci);
 				continue;
 			} else {
+				
+				// Haven't received anything from the client in too long
 				if (now - ci.last_packet_recv > timeout) {
-					if (ci.st == conn_info::CONNECTED) out.emplace_back(packet(cfd, ID_TIMEOUT));
+					// If we made it to the connected stage, it's the listener's job to close our FD
+					// If not, we close it ourselves
+					if (ci.st == conn_info::CONNECTED) {
+						out.emplace_back(packet(cfd, ID_TIMEOUT));
+					} else {
+						close(cfd);
+					}
 					fd_to_ci = peer::disconnect(fd_to_ci);
 					continue;
 				}
 
+				// Send a heartbeat
 				if (now - max(ci.last_heartbeat_sent, ci.last_packet_recv) >= heartbeat_period) {
+				
+					// Failed to send heartbeat
 					if (send(cfd, packet(cfd, ID_HEARTBEAT)) != SUCCESS) {
-						if (ci.st == conn_info::CONNECTED) out.emplace_back(packet(cfd, ID_DISCONNECTION));
+						// If we made it to the connected stage, it's the listener's job to close our FD
+						// If not, we close it ourselves
+						if (ci.st == conn_info::CONNECTED) {
+							out.emplace_back(packet(cfd, ID_DISCONNECTION));
+						} else {
+							close(cfd);
+						}
 						fd_to_ci = peer::disconnect(fd_to_ci);
 						continue;
 					}
@@ -696,6 +719,11 @@ namespace clarcnet {
 		if (conn_it != conns.end())
 			peer::disconnect(conn_it);
 		peer::close(cfd);
+	}
+	
+	size_t server::num_conns()
+	{
+		return conns.size();
 	}
 
 	client::client(string const& host, uint16_t port, ms timeout) :
