@@ -1,3 +1,6 @@
+// Keep asserts active in release builds
+#undef NDEBUG
+
 #include "clarcnet.h"
 
 #include <cassert>
@@ -877,6 +880,7 @@ namespace clarcnet {
 	)
 	{
 		assert(EVP_CIPHER_CTX_block_size(ctx) == 1);
+		assert(EVP_CIPHER_CTX_mode(ctx) == EVP_CIPHER_mode(cipher_t));
 		
 		int rem      = static_cast<int>(in.size());
 		int len      = 0;
@@ -891,6 +895,8 @@ namespace clarcnet {
 			assert(len < in.size());
 			assert(len < out.size());
 
+			LOG(INFO) << "CipherUpdate " << rem << " " << len << " " << this_len << " " << out.size() << " " << in.size() << " ";
+			
 			if (EVP_CipherUpdate(
 				ctx,
 				out.data() + len,
