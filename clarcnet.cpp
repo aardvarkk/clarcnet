@@ -879,6 +879,8 @@ namespace clarcnet {
 		vector<uint8_t>& out
 	)
 	{
+		LOG(INFO) << "ctx " << ctx;
+		
 		assert(EVP_CIPHER_CTX_block_size(ctx) == 1);
 		assert(EVP_CIPHER_CTX_mode(ctx) == EVP_CIPHER_mode(cipher_t));
 		
