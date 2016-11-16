@@ -377,7 +377,6 @@ namespace clarcnet {
 		
 		bool cipher(
 			EVP_CIPHER_CTX* ctx,
-			conn_info& ci,
 			std::vector<uint8_t> const& in,
 			std::vector<uint8_t>& out
 			);

@@ -213,7 +213,7 @@ namespace clarcnet {
 		if (p.mid >= ID_USER) {
 			assert(ci.st == conn_info::CONNECTED);
 			vector<uint8_t> p_enc;
-			cipher(ci.ctx_enc, ci, p, p_enc);
+			cipher(ci.ctx_enc, p, p_enc);
 			p.vector::operator=(p_enc);
 		}
 		
@@ -307,7 +307,7 @@ namespace clarcnet {
 		// Decrypt!
 		if (ci.r.w.mid >= ID_USER) {
 			vector<uint8_t> p_dec;
-			cipher(ci.ctx_dec, ci, ci.r.w, p_dec);
+			cipher(ci.ctx_dec, ci.r.w, p_dec);
 			ci.r.w.vector::operator=(p_dec);
 		}
 		
@@ -569,7 +569,7 @@ namespace clarcnet {
 		in.front().srlz(false, session_key_enc);
 		in.front().srlz(false, ci.iv);
 		
-		cipher(ci.ctx_dec, ci, session_key_enc, ci.session_key);
+		cipher(ci.ctx_dec, session_key_enc, ci.session_key);
 
 		// Initialize our session ciphers
 		cipher_init(true,  ci.ctx_enc, ci.session_key.data(), ci.iv.data());
@@ -844,7 +844,6 @@ namespace clarcnet {
 	
 	bool peer::cipher(
 		EVP_CIPHER_CTX* ctx,
-		conn_info& ci,
 		vector<uint8_t> const& in,
 		vector<uint8_t>& out
 	)
@@ -857,7 +856,13 @@ namespace clarcnet {
 
 		out.resize(in.size());
 		
+		// Nothing to do!
+		if (in.empty()) return true;
+		
 		while (rem > 0) {
+			assert(len < in.size());
+			assert(len < out.size());
+
 			if (EVP_CipherUpdate(
 				ctx,
 				out.data() + len,
@@ -867,6 +872,8 @@ namespace clarcnet {
 			
 			rem -= this_len;
 			len += this_len;
+			
+			assert(rem >= 0);
 		}
 		
 		assert(len == out.size());
@@ -918,7 +925,7 @@ namespace clarcnet {
 		RAND_bytes(ci->iv.data(), static_cast<int>(ci->iv.size()));
 
 		vector<uint8_t> session_key_enc;
-		cipher(ci->ctx_enc, *ci, ci->session_key, session_key_enc);
+		cipher(ci->ctx_enc, ci->session_key, session_key_enc);
 
 		packet session(fd, ID_CIPHER);
 		session.srlz(true, temp_key);
