@@ -80,6 +80,7 @@ namespace clarcnet {
 		if (w) {
 			push_back(val);
 		} else {
+			if (rpos + sizeof(val) > size()) return;
 			val = this->operator[](rpos);
 			rpos += sizeof val;
 		}
@@ -94,12 +95,7 @@ namespace clarcnet {
 	template <>
 	inline void streambuffer::srlz(bool w, bool& val)
 	{
-		if (w) {
-			push_back(val);
-		} else {
-			val = this->operator[](rpos);
-			rpos += sizeof val;
-		}
+		srlz(w, reinterpret_cast<uint8_t&>(val));
 	}
 	
 	template <>
@@ -110,6 +106,7 @@ namespace clarcnet {
 			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
 			insert(end(), p, p + sizeof val);
 		} else {
+			if (rpos + sizeof(val) > size()) return;
 			val = ntohs(*reinterpret_cast<uint16_t*>(&this->operator[](rpos)));
 			rpos += sizeof val;
 		}
@@ -129,6 +126,7 @@ namespace clarcnet {
 			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
 			insert(end(), p, p + sizeof val);
 		} else {
+			if (rpos + sizeof(val) > size()) return;
 			val = ntohl(*reinterpret_cast<uint32_t*>(&this->operator[](rpos)));
 			rpos += sizeof val;
 		}
@@ -152,6 +150,7 @@ namespace clarcnet {
 			uint8_t* p = reinterpret_cast<uint8_t*>(&vn);
 			insert(end(), p, p + sizeof val);
 		} else {
+			if (rpos + sizeof(val) > size()) return;
 			#ifdef __linux
 			val = be64toh(*reinterpret_cast<uint64_t*>(&this->operator[](rpos)));
 			#else
@@ -174,7 +173,7 @@ namespace clarcnet {
 			int32_t ival = val * (1<<binplcs);
 			srlz(w, ival);
 		} else {
-			int32_t ival;
+			int32_t ival = 0;
 			srlz(w, ival);
 			val = static_cast<float>(ival) / (1<<binplcs);
 		}
@@ -211,7 +210,8 @@ namespace clarcnet {
 				srlz(w, intro);
 				srlz(w, val.v);
 			} else {
-				throw std::runtime_error("Invalid size!");
+				// Invalid size!
+				return;
 			}
 		} else {
 			uint8_t intro;
@@ -241,7 +241,8 @@ namespace clarcnet {
 				val.v = v;
 			}
 			else {
-				throw std::runtime_error("Invalid size!");
+				// Invalid size!
+				return;
 			}
 		}
 	}
@@ -266,6 +267,9 @@ namespace clarcnet {
 			len_t l;
 			srlz(w, l);
 			
+			// Size check for malicious data
+			if (rpos + l.v > size()) return;
+			
 			uint8_t* p = &this->operator[](rpos);
 			str = std::string(p, p + l.v);
 			rpos += l.v;
@@ -282,6 +286,9 @@ namespace clarcnet {
 		} else {
 			len_t l;
 			srlz(w, l);
+
+			// Size check for malicious data
+			if (rpos + l.v > size()) return;
 			
 			uint8_t* p = &this->operator[](rpos);
 			vec = std::vector<uint8_t>(p, p + l.v);
