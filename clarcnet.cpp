@@ -2,7 +2,7 @@
 #undef NDEBUG
 
 #include "clarcnet.h"
-#include "spdlog/spdlog.h"
+#include "easylogging++.h"
 
 #include <cassert>
 #include <openssl/err.h>
@@ -105,7 +105,7 @@ namespace clarcnet {
 		ctx_dec = EVP_CIPHER_CTX_new();
 		assert(ctx_dec);
 
-		INFO("conn_info() {} {}", static_cast<void*>(ctx_enc), static_cast<void*>(ctx_dec));
+		LOG(INFO) << "conn_info() " << ctx_enc << " " << ctx_dec;
 		
 		memset(addr_str, 0, sizeof(addr_str));
 	}
@@ -118,7 +118,7 @@ namespace clarcnet {
 		ctx_enc = nullptr;
 		ctx_dec = nullptr;
 
-		INFO("~conn_info() {} {}", static_cast<void*>(ctx_enc), static_cast<void*>(ctx_dec));
+		LOG(INFO) << "~conn_info() " << ctx_enc << " " << ctx_dec;
 	}
 
 	peer::peer() :
@@ -907,7 +907,7 @@ namespace clarcnet {
 		vector<uint8_t>& out
 	)
 	{
-		INFO("ctx {}", static_cast<void*>(ctx));
+		LOG(INFO) << "ctx " << ctx;
 		
 		assert(EVP_CIPHER_CTX_block_size(ctx) == 1);
 		assert(EVP_CIPHER_CTX_mode(ctx) == EVP_CIPHER_mode(cipher_t));
@@ -925,7 +925,9 @@ namespace clarcnet {
 			assert(len < in.size());
 			assert(len < out.size());
 
-			INFO("CipherUpdate {} {} {} {} {}", rem, len, this_len, out.size(), in.size());
+			auto outsize = out.size();
+			auto insize  = in.size();
+			LOG(INFO) << "CipherUpdate " << rem << " " << len << " " << this_len << " " << outsize << " " << insize;
 			
 			if (EVP_CipherUpdate(
 				ctx,
