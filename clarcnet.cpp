@@ -105,7 +105,7 @@ namespace clarcnet {
 		ctx_dec = EVP_CIPHER_CTX_new();
 		assert(ctx_dec);
 
-		LOG(INFO) << "conn_info() " << ctx_enc << " " << ctx_dec;
+		//LOG(DEBUG) << "conn_info() " << ctx_enc << " " << ctx_dec;
 		
 		memset(addr_str, 0, sizeof(addr_str));
 	}
@@ -118,7 +118,7 @@ namespace clarcnet {
 		ctx_enc = nullptr;
 		ctx_dec = nullptr;
 
-		LOG(INFO) << "~conn_info() " << ctx_enc << " " << ctx_dec;
+		//LOG(DEBUG) << "~conn_info() " << ctx_enc << " " << ctx_dec;
 	}
 
 	peer::peer() :
@@ -327,7 +327,7 @@ namespace clarcnet {
 		
 		// Decrypt!
 		if (ci.r.w.mid >= ID_USER) {
-//			LOG(INFO) << "Decrypting mid " << +ci.r.w.mid << " from " << fd;
+//			LOG(DEBUG) << "Decrypting mid " << +ci.r.w.mid << " from " << fd;
 			vector<uint8_t> p_dec;
 			cipher(ci.ctx_dec, ci.r.w, p_dec);
 			ci.r.w.vector::operator=(p_dec);
@@ -907,7 +907,7 @@ namespace clarcnet {
 		vector<uint8_t>& out
 	)
 	{
-		LOG(INFO) << "ctx " << ctx;
+		//LOG(DEBUG) << "ctx " << ctx;
 		
 		assert(EVP_CIPHER_CTX_block_size(ctx) == 1);
 		assert(EVP_CIPHER_CTX_mode(ctx) == EVP_CIPHER_mode(cipher_t));
@@ -927,7 +927,7 @@ namespace clarcnet {
 
 			auto outsize = out.size();
 			auto insize  = in.size();
-			LOG(INFO) << "CipherUpdate " << rem << " " << len << " " << this_len << " " << outsize << " " << insize;
+			//LOG(DEBUG) << "CipherUpdate " << rem << " " << len << " " << this_len << " " << outsize << " " << insize;
 			
 			if (EVP_CipherUpdate(
 				ctx,
