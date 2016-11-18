@@ -1,5 +1,6 @@
 #include "clarcnet.h"
 
+#include <cassert>
 #include <cstdlib>
 #include <iostream>
 
