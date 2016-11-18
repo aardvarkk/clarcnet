@@ -3,7 +3,9 @@
 
 #include "clarcnet.h"
 
+#include <algorithm>
 #include <cassert>
+#include <cstring>
 #include <openssl/err.h>
 #include <openssl/rand.h>
 
