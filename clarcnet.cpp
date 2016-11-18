@@ -15,8 +15,8 @@ FILE* flog = nullptr;
 #define LOG(...) \
 { \
 	if (flog) { \
-		auto t = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count(); \
-		fprintf(flog, "%lld ", t); \
+		long long unsigned int t = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count(); \
+		fprintf(flog, "%llu ", t); \
 		fprintf(flog, __VA_ARGS__); \
 		fprintf(flog, "\n"); \
 		fflush(flog); \
