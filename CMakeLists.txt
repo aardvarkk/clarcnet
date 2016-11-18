@@ -1,7 +1,16 @@
+cmake_minimum_required(VERSION 3.4)
+
 set (CMAKE_CXX_STANDARD 11)
 
-add_executable(server server.cpp)
+find_package (OpenSSL REQUIRED)
 
-add_executable(client client.cpp)
+include_directories(${OPENSSL_INCLUDE_DIR})
 
-add_executable(tests tests.cpp)
+add_executable(server clarcnet.cpp server.cpp)
+target_link_libraries(server ${OPENSSL_CRYPTO_LIBRARY})
+
+add_executable(client clarcnet.cpp client.cpp)
+target_link_libraries(client ${OPENSSL_CRYPTO_LIBRARY})
+
+add_executable(tests clarcnet.cpp tests.cpp)
+target_link_libraries(tests ${OPENSSL_CRYPTO_LIBRARY})
