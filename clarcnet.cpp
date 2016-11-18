@@ -2,7 +2,6 @@
 #undef NDEBUG
 
 #include "clarcnet.h"
-#include "easylogging++.h"
 
 #include <cassert>
 #include <openssl/err.h>
@@ -10,8 +9,8 @@
 
 using namespace std;
 
-// Helpful defines for logging
-#define INFO(...) spdlog::get("log")->info(__VA_ARGS__)
+FILE* flog = nullptr;
+#define LOG(...) { if (flog) { fprintf(flog, __VA_ARGS__); fprintf(flog, "\n"); fflush(flog); } }
 
 namespace clarcnet {
 
@@ -105,7 +104,7 @@ namespace clarcnet {
 		ctx_dec = EVP_CIPHER_CTX_new();
 		assert(ctx_dec);
 
-		//LOG(DEBUG) << "conn_info() " << ctx_enc << " " << ctx_dec;
+		LOG("conn_info() %p %p", ctx_enc, ctx_dec);
 		
 		memset(addr_str, 0, sizeof(addr_str));
 	}
@@ -118,7 +117,7 @@ namespace clarcnet {
 		ctx_enc = nullptr;
 		ctx_dec = nullptr;
 
-		//LOG(DEBUG) << "~conn_info() " << ctx_enc << " " << ctx_dec;
+		LOG("~conn_info() %p %p", ctx_enc, ctx_dec);
 	}
 
 	peer::peer() :
@@ -132,6 +131,7 @@ namespace clarcnet {
 
 	ret_code peer::close(int fd)
 	{
+		LOG("close %d", fd);
 		int err = ::close(fd);
 		chk(err);
 		return SUCCESS;
@@ -325,9 +325,11 @@ namespace clarcnet {
 		ci.r.w.resize(ci.r.req.v);
 		ci.r.w.fd = fd;
 		
+		LOG("Received mid %u from %d", ci.r.w.mid, fd);
+		
 		// Decrypt!
 		if (ci.r.w.mid >= ID_USER) {
-//			LOG(DEBUG) << "Decrypting mid " << +ci.r.w.mid << " from " << fd;
+			LOG("Decrypting mid %u from %d", ci.r.w.mid, fd);
 			vector<uint8_t> p_dec;
 			cipher(ci.ctx_dec, ci.r.w, p_dec);
 			ci.r.w.vector::operator=(p_dec);
@@ -355,6 +357,13 @@ namespace clarcnet {
 					recv_packet(fd, ci, ps);
 					continue;
 				}
+
+				// Only we're allowed to generate these types of data packets, so don't allow the other end to send them directly
+				// Malicious people could do this...
+				if (r.w.mid == ID_CONNECTION ||
+						r.w.mid == ID_DISCONNECTION ||
+						r.w.mid == ID_TIMEOUT)
+					return FAILURE;
 
 				r.state = receive_state::HeaderIntro;
 				r.recvd = 0;
@@ -392,17 +401,11 @@ namespace clarcnet {
 					if (code != SUCCESS) return code;
 
 					if (r.recvd == r.req) {
-					
-						// Only we're allowed to generate these types of data packets, so don't allow the other end to send them directly
-						// Malicious people could do this...
-						if (ci.r.w.mid == ID_CONNECTION ||
-						    ci.r.w.mid == ID_DISCONNECTION ||
-								ci.r.w.mid == ID_TIMEOUT)
-							return FAILURE;
-						
-
 						recv_packet(fd, ci, ps);
-						if (max && ps.size() >= max) return code;
+						
+						// We got as many packets as we asked for
+						if (max && ps.size() == max) return code;
+						
 						break;
 					}
 				}
@@ -414,6 +417,8 @@ namespace clarcnet {
 	peer::conn_map::iterator peer::disconnect(peer::conn_map::iterator conn_it)
 	{
 		int cfd = conn_it->first;
+		LOG("erasing %d from size %lu", cfd, conns.size());
+		
 		delayed.erase(remove_if(delayed.begin(), delayed.end(),
 														[=](delayed_send const& ds) {
 															return ds.fd == cfd;
@@ -449,11 +454,15 @@ namespace clarcnet {
 		string const& pubkeyfile,
 		string const& prvkeyfile,
 		ms heartbeat_period,
-		ms timeout) :
-		heartbeat_period(heartbeat_period),
-		timeout(timeout)
-	
+		ms timeout,
+		string const& logfile
+		) :	heartbeat_period(heartbeat_period), timeout(timeout)
 	{
+		if (!logfile.empty()) {
+			flog = fopen(logfile.c_str(), "w");
+			if (!flog) throw runtime_error("Unable to open log file " + logfile);
+		}
+
 		public_key  = load_key(true,  pubkeyfile);
 		private_key = load_key(false, prvkeyfile);
 		cphr        = (public_key && private_key) ? cipher_t : EVP_enc_null();
@@ -500,6 +509,10 @@ namespace clarcnet {
 
 	server::~server()
 	{
+		if (flog) {
+			fclose(flog);
+		}
+		
 		for (auto it = conns.begin(); it != conns.end(); ++it) {
 			close(it->first);
 		}
@@ -515,7 +528,7 @@ namespace clarcnet {
 
 	ret_code server::process_initiated(int cfd, conn_info& ci, packets& in, packets& out)
 	{
-//		LOG(DEBUG) << "process_initiated " << cfd;
+		LOG("process_initiated %d %lu %lu", cfd, in.size(), out.size());
 		
 		if (in.empty() || in.front().mid != ID_VERSION) return WAITING;
 		
@@ -558,6 +571,7 @@ namespace clarcnet {
 		if (!match) {
 			return FAILURE;
 		} else {
+			LOG("transition %d to versioned", cfd);
 			ci.st = conn_info::VERSIONED;
 			
 			// Send our public key for client to use (could be empty)
@@ -577,7 +591,7 @@ namespace clarcnet {
 	
 	ret_code server::process_versioned(int cfd, conn_info& ci, packets& in, packets& out)
 	{
-//		LOG(DEBUG) << "process_versioned " << cfd;
+		LOG("process_versioned %d", cfd);
 		
 		if (in.empty() || in.front().mid != ID_CIPHER) return WAITING;
 		
@@ -609,10 +623,9 @@ namespace clarcnet {
 		// We're done with the cipher message, so we won't pass it along to the client
 		in.erase(in.begin());
 		
+		LOG("transition %d to connected", cfd);
 		ci.st = conn_info::CONNECTED;
 		out.emplace_back(packet(cfd, ID_CONNECTION));
-		
-//		LOG(DEBUG) << "connected " << cfd;
 		
 		return SUCCESS;
 	}
@@ -631,11 +644,13 @@ namespace clarcnet {
 					thr;
 				}
 			} else {
-//				LOG(DEBUG) << "accept " << cfd;
+				LOG("accept %d", cfd);
 				
 				assert(!conns.count(cfd));
-				
 				conn_info& ci = conns[cfd];
+				LOG("added %d now size %lu", cfd, conns.size());
+
+				LOG("transition %d to initiated", cfd);
 				ci.st = conn_info::INITIATED;
 				
 				inet_ntop(client.ss_family, in_addr((sockaddr*)&client), conns[cfd].addr_str, sizeof conns[cfd].addr_str);
@@ -686,7 +701,7 @@ namespace clarcnet {
 			}
 			
 			if (code != FAILURE && ci.st == conn_info::CONNECTED) {
-//				LOG(DEBUG) << "process_connected";
+				//LOG("process_connected %d", cfd);
 				out.insert(out.end(), in.begin(), in.end());
 			}
 
@@ -800,7 +815,7 @@ namespace clarcnet {
 
 	void client::disconnect()
 	{
-//		LOG(DEBUG) << "close " << fd;
+		LOG("close %d", fd);
 		
 		peer::close(fd);
 		fd = -1;
@@ -815,7 +830,7 @@ namespace clarcnet {
 
 	ret_code client::process_initiating()
 	{
-//		LOG(DEBUG) << "process_initiating";
+		LOG("process_initiating");
 		
 		if (!poll_write()) return WAITING;
 		
@@ -848,7 +863,7 @@ namespace clarcnet {
 	
 	ret_code client::process_initiated(packets& in, packets& out)
 	{
-//		LOG(DEBUG) << "process_initiated";
+		LOG("process_initiated");
 		
 		if (in.empty() || in.front().mid != ID_VERSION) return WAITING;
 
@@ -907,7 +922,7 @@ namespace clarcnet {
 		vector<uint8_t>& out
 	)
 	{
-		//LOG(DEBUG) << "ctx " << ctx;
+		LOG("ctx %p", ctx);
 		
 		assert(EVP_CIPHER_CTX_block_size(ctx) == 1);
 		assert(EVP_CIPHER_CTX_mode(ctx) == EVP_CIPHER_mode(cipher_t));
@@ -925,9 +940,7 @@ namespace clarcnet {
 			assert(len < in.size());
 			assert(len < out.size());
 
-			auto outsize = out.size();
-			auto insize  = in.size();
-			//LOG(DEBUG) << "CipherUpdate " << rem << " " << len << " " << this_len << " " << outsize << " " << insize;
+			LOG("CipherUpdate %d %d %d %lu %lu", rem, len, this_len, out.size(), in.size());
 			
 			if (EVP_CipherUpdate(
 				ctx,
@@ -949,7 +962,7 @@ namespace clarcnet {
 	
 	ret_code client::process_versioned(packets& in, packets& out)
 	{
-//		LOG(DEBUG) << "process_versioned";
+		LOG("process_versioned");
 		
 		if (in.empty() || in.front().mid != ID_CIPHER) return WAITING;
 		
@@ -1041,7 +1054,7 @@ namespace clarcnet {
 		}
 		
 		if (code != FAILURE && ci->st == conn_info::CONNECTED) {
-//			LOG(DEBUG) << "process_connected";
+			//LOG("process_connected");
 			out.insert(out.begin(), in.begin(), in.end());
 		}
 		

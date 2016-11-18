@@ -420,7 +420,8 @@ namespace clarcnet {
 			std::string const& pubkeyfile = std::string(),
 			std::string const& prvkeyfile = std::string(),
 			ms heartbeat_period = ms(4000),
-			ms timeout = ms(15000)
+			ms timeout = ms(15000),
+			std::string const& logfile = std::string()
 		);
 		
 		~server();
