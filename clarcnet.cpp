@@ -16,7 +16,7 @@ FILE* flog = nullptr;
 { \
 	if (flog) { \
 		auto t = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count(); \
-		fprintf(flog, "%lu ", t); \
+		fprintf(flog, "%lld ", t); \
 		fprintf(flog, __VA_ARGS__); \
 		fprintf(flog, "\n"); \
 		fflush(flog); \
