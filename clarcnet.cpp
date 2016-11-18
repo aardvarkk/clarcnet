@@ -376,6 +376,11 @@ namespace clarcnet {
 						r.w.mid == ID_TIMEOUT)
 					return FAILURE;
 
+				// If we're not connected yet, users shouldn't be sending us ID_USER messages or we'll try to decrypt them
+				// without having decryption set up properly yet! SIGSEG will occur.
+				if (r.w.mid >= ID_USER && ci.st != conn_info::CONNECTED) 
+					return FAILURE;
+
 				r.state = receive_state::HeaderIntro;
 				r.recvd = 0;
 				r.req   = 1;
