@@ -481,9 +481,10 @@ namespace clarcnet {
 			if (!flog) throw runtime_error("Unable to open log file " + logfile);
 		}
 
-		public_key  = load_key(true,  pubkeyfile);
-		private_key = load_key(false, prvkeyfile);
-		cphr        = (public_key && private_key) ? cipher_t : EVP_enc_null();
+		if (!pubkeyfile.empty()) public_key  = load_key(true,  pubkeyfile);
+		if (!prvkeyfile.empty()) private_key = load_key(false, prvkeyfile);
+		
+		cphr = (public_key && private_key) ? cipher_t : EVP_enc_null();
 		
 		int err;
 		addrinfo hints    = {}, *res;
