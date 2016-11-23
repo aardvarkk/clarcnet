@@ -458,8 +458,10 @@ namespace clarcnet {
 				key = is_public ?
 					PEM_read_PUBKEY(fp, nullptr, nullptr, nullptr) :
 					PEM_read_PrivateKey(fp, nullptr, nullptr, nullptr);
+				fclose(fp);
+			} else {
+				throw runtime_error("Unable to load key " + filename);
 			}
-			fclose(fp);
 		}
 		
 		return key;
