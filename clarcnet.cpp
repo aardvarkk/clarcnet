@@ -562,7 +562,7 @@ namespace clarcnet {
 		bool match = true;
 		
 		// TRANSITIONAL
-		// TOOD: REMOVE
+		// TODO: REMOVE
 		if (in.front().size() == 6) {
 			for (int i = 0; i < 6; ++i) {
 				uint8_t maxver;
