@@ -509,9 +509,6 @@ namespace clarcnet {
 		val = 1;
 		err = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
 		chk(err);
-		val = 1;
-		err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
-		chk(err);
 		#ifdef SO_NOSIGPIPE
 		val = 1;
 		err = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
