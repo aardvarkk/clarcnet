@@ -857,22 +857,8 @@ namespace clarcnet {
 		res = nullptr;
 		
 		packet version(fd, ID_VERSION);
-		
-		// TRANSITIONAL
-		// Send a 6-byte old-style version
-		// Old server will see we're too new and forward us
-		// New server will detect we're using old approach and allow it
-		if (true) {
-			uint8_t v = ver_transition;
-			version.srlz(true, v); version.srlz(true, v);
-			version.srlz(true, v); version.srlz(true, v);
-			version.srlz(true, v); version.srlz(true, v);
-		}
-		else {
-			// New approach...
-			ver_t ver_cl = ver_code;
-			version.srlz(true, ver_cl);
-		}
+		ver_t ver_cl = ver_code;
+		version.srlz(true, ver_cl);
 		
 		return send(move(version));
 	}
@@ -885,25 +871,9 @@ namespace clarcnet {
 
 		bool match = true;
 		
-		// TRANSITIONAL
-		// TODO: REMOVE
-		if (in.front().size() == 6) {
-			uint8_t v;
-			for (auto i = 0; i < 6; ++i) {
-				in.front().srlz(false, v);
-				if (v != ver_transition) {
-					match = false;
-					break;
-				}
-			}
-		}
-		// New approach
-		else if (in.front().size() == sizeof(ver_t))
-		{
-			ver_t ver_sv;
-			in.front().srlz(false, ver_sv);
-			match = ver_sv == ver_code;
-		}
+		ver_t ver_sv;
+		in.front().srlz(false, ver_sv);
+		match = ver_sv == ver_code;
 		
 		in.erase(in.begin());
 		
