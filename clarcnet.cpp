@@ -889,8 +889,14 @@ namespace clarcnet {
 		bool match = true;
 		
 		ver_t ver_sv;
-		in.front().srlz(false, ver_sv);
-		match = ver_sv == ver_code;
+		if (in.front().size() != sizeof(ver_t)) {
+			match = false;
+			ver_sv = 0;
+		}
+		else {
+			in.front().srlz(false, ver_sv);
+			match = ver_sv == ver_code;
+		}
 		
 		in.erase(in.begin());
 		
