@@ -420,7 +420,7 @@ namespace clarcnet {
 			std::string const& pubkeyfile = std::string(),
 			std::string const& prvkeyfile = std::string(),
 			ms heartbeat_period = ms(4000),
-			ms timeout = ms(15000),
+			ms timeout = ms(30000),
 			std::string const& logfile = std::string()
 		);
 		
@@ -450,7 +450,7 @@ namespace clarcnet {
 	{
 	public:
 		
-		client(std::string const& host, uint16_t port, ms timeout = ms(0));
+		client(std::string const& host, uint16_t port, ms timeout = ms(30000));
 		
 		void     disconnect();
 		packets  process();
