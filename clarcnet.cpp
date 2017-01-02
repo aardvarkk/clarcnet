@@ -583,9 +583,11 @@ namespace clarcnet {
 			ver_t ver_sv = ver_code;
 			resp.srlz(true, ver_sv);
 		}
-		// Unrecognized
+		// Unrecognized -- just send back our version
 		else {
 			match = false;
+			ver_t ver_sv = ver_code;
+			resp.srlz(true, ver_sv);
 		}
 		
 		in.erase(in.begin());
