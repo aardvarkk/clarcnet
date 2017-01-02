@@ -393,9 +393,9 @@ namespace clarcnet {
 		ret_code recv(int fd, conn_info& ci, packets& ps, int max = 0);
 		ret_code send(int fd, conn_info& ci, packet&& p);
 
-		void        flush_backlog();
-		bool        poll_write();
-		void        remove_heartbeats(packets& ps);
+		void flush_backlog();
+		bool poll_write();
+		void remove_heartbeats(packets& ps);
 		
 		conn_map                   conns;   // all connections. server generally has multiple, client has one
 		std::deque<delayed_send>   delayed; // packets that we intentionally want to send late
@@ -452,15 +452,15 @@ namespace clarcnet {
 		
 		client(std::string const& host, uint16_t port, ms timeout = ms(0));
 		
-		void        disconnect();
-		packets     process();
-		ret_code    send(packet&& p);
+		void     disconnect();
+		packets  process();
+		ret_code send(packet&& p);
 
 	protected:
 	
-		ret_code  process_initiating();
-		ret_code  process_initiated(packets& in, packets& out);
-		ret_code  process_versioned(packets& in, packets& out);
+		ret_code process_initiating();
+		ret_code process_initiated(packets& in, packets& out);
+		ret_code process_versioned(packets& in, packets& out);
 		
 		conn_info* ci;         // convenience pointer into peer connection map
 		tp         conn_start;
