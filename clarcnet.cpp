@@ -904,7 +904,9 @@ namespace clarcnet {
 			ci->st = conn_info::VERSIONED;
 			return SUCCESS;
 		} else {
-			out.push_back(packet(fd, ID_VERSION));
+			packet p(fd, ID_VERSION);
+			p.srlz(true, ver_sv);
+			out.push_back(move(p));
 			return FAILURE;
 		}
 	}
