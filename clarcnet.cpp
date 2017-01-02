@@ -26,9 +26,7 @@ FILE* flog = nullptr;
 
 namespace clarcnet {
 
-	const uint8_t     ver_transition = 0x11;
-	const ver_t       ver_code       = 1;
-	const EVP_CIPHER* cipher_t       = EVP_aes_128_ctr(); // EVP_aes_128_cbc seems to force padding so we can't have messages less than block size
+	const EVP_CIPHER* cipher_t = EVP_aes_128_ctr(); // EVP_aes_128_cbc seems to force padding so we can't have messages less than block size
 
 	void* in_addr(sockaddr* sa) {
 		switch (sa->sa_family) {

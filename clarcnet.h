@@ -17,8 +17,10 @@
 
 namespace clarcnet {
 
-	typedef int8_t ver_t;
-	
+	typedef int8_t  ver_t;
+	const   ver_t   ver_code = 1;
+	const   uint8_t ver_transition = 0x11;
+
 	enum msg_id : uint8_t {
 		ID_UNKNOWN,
 		ID_VERSION,
