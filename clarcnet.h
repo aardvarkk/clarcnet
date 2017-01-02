@@ -17,7 +17,7 @@
 
 namespace clarcnet {
 
-	typedef int32_t ver_t;
+	typedef int8_t ver_t;
 	
 	enum msg_id : uint8_t {
 		ID_UNKNOWN,
