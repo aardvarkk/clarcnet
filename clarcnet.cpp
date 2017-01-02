@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <netinet/tcp.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
 
@@ -502,18 +503,27 @@ namespace clarcnet {
 		chk(fd);
 		err = fcntl(fd, F_SETFL, O_NONBLOCK);
 		chk(err);
+		
 		socklen_t val;
+		
 		val = 0;
 		err = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
 		chk(err);
+		
 		val = 1;
 		err = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
 		chk(err);
+		
 		#ifdef SO_NOSIGPIPE
 		val = 1;
 		err = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
 		chk(err);
 		#endif
+		
+		val = 1;
+		err = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
+		chk(err);
+
 		err = ::bind(fd, res->ai_addr, res->ai_addrlen);
 		chk(err);
 		err = listen(fd, 0);
@@ -809,15 +819,23 @@ namespace clarcnet {
 		chk(fd);
 		err = fcntl(fd, F_SETFL, O_NONBLOCK);
 		chk(err);
+		
 		socklen_t val;
+		
 		val = 1;
 		err = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof val);
 		chk(err);
+		
 		#ifdef SO_NOSIGPIPE
 		val = 1;
 		err = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof val);
 		chk(err);
 		#endif
+
+		val = 1;
+		err = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
+		chk(err);
+
 		err = connect(fd, res->ai_addr, res->ai_addrlen);
 
 		if (err < 0 && errno != EINPROGRESS) {
