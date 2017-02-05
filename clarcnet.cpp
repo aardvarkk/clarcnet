@@ -607,6 +607,8 @@ namespace clarcnet {
 			
 			vector<uint8_t> pubkey;
 			pubkey.insert(pubkey.begin(), serialized, serialized + sz);
+
+			free(serialized);
 			
 			pk.srlz(true, pubkey);
 			
