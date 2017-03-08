@@ -409,8 +409,8 @@ namespace clarcnet {
 		void     recv_packet(int fd, conn_info& ci, packets& ps);
 		ret_code send_packet(int fd, conn_info& ci, packet& p);
 
-		ret_code recv_sock(int fd, void* buffer, len_t bytes, len_t& recvd);
-		ret_code send_sock(int fd, void const* data, size_t sz);
+		ret_code recv_sock(int fd, uint8_t* buffer, len_t bytes, len_t& recvd);
+		ret_code send_sock(int fd, uint8_t const* data, size_t sz);
 	};
 
 	class server : public peer

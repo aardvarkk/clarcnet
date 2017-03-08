@@ -188,14 +188,14 @@ namespace clarcnet {
 		return true;
 	}
 
-	ret_code peer::send_sock(int fd, void const* data, size_t sz)
+	ret_code peer::send_sock(int fd, uint8_t const* data, size_t sz)
 	{
 		if (sz == 0) return SUCCESS;
 
 		size_t sent = 0;
 
 		while (sent < sz) {
-			auto len = ::send(fd, data, sz - sent, 0);
+			auto len = ::send(fd, data + sent, sz - sent, 0);
 
 			if (len > 0) sent += len;
 
@@ -295,7 +295,7 @@ namespace clarcnet {
 		}
 	}
 
-	ret_code peer::recv_sock(int fd, void* buffer, len_t bytes, len_t& recvd)
+	ret_code peer::recv_sock(int fd, uint8_t* buffer, len_t bytes, len_t& recvd)
 	{
 		if (!bytes.v) return SUCCESS;
 
