@@ -74,6 +74,8 @@ namespace clarcnet {
 
 		template <typename T>
 		void srlz(bool w, T& val);
+
+		int remaining() { return static_cast<int>(size()) - rpos; }
 	};
 
 	template <>
