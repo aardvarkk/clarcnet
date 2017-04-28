@@ -255,7 +255,7 @@ namespace clarcnet {
 	template <typename T>
 	inline void streambuffer::srlz(bool w, T& val)
 	{
-		len_t l(val);
+		len_t l(static_cast<typename std::underlying_type<T>::type>(val));
 		srlz(w, l);
 		val = static_cast<T>(l.v);
 	}
