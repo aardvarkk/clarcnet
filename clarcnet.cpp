@@ -431,7 +431,7 @@ namespace clarcnet {
 	peer::conn_map::iterator peer::disconnect(peer::conn_map::iterator conn_it)
 	{
 		int cfd = conn_it->first;
-		LOG("erasing %d from size %lu", cfd, conns.size());
+		LOG("erasing %d from size %zu", cfd, conns.size());
 		
 		delayed.erase(remove_if(delayed.begin(), delayed.end(),
 														[=](delayed_send const& ds) {
@@ -551,7 +551,7 @@ namespace clarcnet {
 
 	ret_code server::process_initiated(int cfd, conn_info& ci, packets& in, packets& out)
 	{
-		LOG("process_initiated %d %lu %lu", cfd, in.size(), out.size());
+		LOG("process_initiated %d %zu %zu", cfd, in.size(), out.size());
 		
 		if (in.empty() || in.front().mid != ID_VERSION) return WAITING;
 		
@@ -675,7 +675,7 @@ namespace clarcnet {
 				
 				assert(!conns.count(cfd));
 				conn_info& ci = conns[cfd];
-				LOG("added %d now size %lu", cfd, conns.size());
+				LOG("added %d now size %zu", cfd, conns.size());
 
 				LOG("transition %d to initiated", cfd);
 				ci.st = conn_info::INITIATED;
@@ -953,7 +953,7 @@ namespace clarcnet {
 			assert(len < in.size());
 			assert(len < out.size());
 
-			LOG("CipherUpdate %d %d %d %lu %lu", rem, len, this_len, out.size(), in.size());
+			LOG("CipherUpdate %d %d %d %zu %zu", rem, len, this_len, out.size(), in.size());
 			
 			if (EVP_CipherUpdate(
 				ctx,
