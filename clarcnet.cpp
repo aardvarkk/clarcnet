@@ -7,7 +7,6 @@
 #include <cassert>
 #include <cstring>
 #include <netinet/tcp.h>
-#include <openssl/err.h>
 #include <openssl/rand.h>
 
 using namespace std;

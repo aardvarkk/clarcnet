@@ -1,12 +1,9 @@
 #include "clarcnet.h"
 
-#include <cstdlib>
 #include <execinfo.h>
 #include <iostream>
 #include <mutex>
-#include <signal.h>
 #include <thread>
-#include <unistd.h>
 
 using namespace clarcnet;
 using namespace std;
